@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# SQLite runtime data — never commit local data
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+plugin-data/
+
+# Node
+node_modules/
+dist/
+
+# Hermes install markers (machine-specific, auto-generated on install)
+.hermes-package.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

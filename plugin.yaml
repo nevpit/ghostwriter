@@ -1,0 +1,18 @@
+name: hermes-screenplay
+version: 0.1.0
+description: "Local screenplay workspace: Fountain parsing, immutable revisions, proposal workflow with deterministic validation, and stdlib PDF export. Agent tools plus a desktop pane; no third-party runtime dependencies."
+author: "Hermes"
+provides_tools:
+  - screenplay_status
+  - screenplay_list_projects
+  - screenplay_get_project
+  - screenplay_history
+  - screenplay_read_scene
+  - screenplay_import
+  - screenplay_propose
+  - screenplay_check_proposal
+  - screenplay_accept_proposal
+  - screenplay_reject_proposal
+  - screenplay_export_pdf
+  - screenplay_restore
+  - screenplay_undo

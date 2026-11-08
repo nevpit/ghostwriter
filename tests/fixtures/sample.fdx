@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<finaldraft version="13">
+  <doc>
+    <credit>
+      <line><text>Written by Jane Doe</text></line>
+    </credit>
+    <main_title>
+      <line><text>The Harbor Light</text></line>
+    </main_title>
+    <scene>
+      <scene_heading>
+        <line><text>INT. ROOM 1 - NIGHT</text></line>
+      </scene_heading>
+      <action>
+        <line><text>LENA walks in. The room is small and dark.</text></line>
+      </action>
+      <character>
+        <name>
+          <line><text>LENA</text></line>
+        </name>
+        <parenthetical>
+          <line><text>whispering</text></line>
+        </parenthetical>
+        <line>
+          <text>I can't believe you're here.</text>
+        </line>
+      </character>
+    </scene>
+    <scene>
+      <scene_heading>
+        <line><text>EXT. ROOM 2 - DAY</text></line>
+      </scene_heading>
+      <transition>
+        <line><text>CUT TO:</text></line>
+      </transition>
+      <character>
+        <name>
+          <line><text>MAX</text></line>
+        </name>
+        <line>
+          <text>We need to talk.</text>
+        </line>
+      </character>
+    </scene>
+  </doc>
+</finaldraft>
