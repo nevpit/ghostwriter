@@ -230,6 +230,8 @@ function ScreenplayPane() {
     () => Object.fromEntries(scenes.map(s => [s.id, s])),
     [scenes])
   const activeRevId = data ? data.active_revision_id : null
+  const projectFormat = (data && data.project && data.project.format) || 'screenplay'
+  const isProse = projectFormat === 'prose'
 
   // Auto-select a project; drop selection if it disappeared.
   useEffect(() => {
@@ -564,6 +566,20 @@ function ScreenplayPane() {
     }
   }
 
+  async function doExportMarkdown() {
+    if (!pid) return
+    setBusy(true)
+    try {
+      const r = await api(`/projects/${pid}/markdown`, { method: 'GET' })
+      downloadText(r.markdown, r.filename)
+      setNotice({ kind: 'ok', text: `Exported ${r.filename} (${r.size_bytes} bytes).` })
+    } catch (e) {
+      setNotice({ kind: 'err', text: `Markdown export failed: ${errInfo(e).text}` })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   function downloadText(text, filename) {
     try {
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
@@ -595,12 +611,14 @@ function ScreenplayPane() {
 
   const header = jsxs('div', { className: 'hsp-header', children: [
     jsx('div', { className: 'hsp-title', children: 'Screenplay' }),
+    data ? jsx('span', { className: 'hsp-sub', title: 'Document format',
+      children: isProse ? 'Prose' : 'Script' }) : null,
     jsxs('div', { className: 'hsp-header-right', children: [
       jsx('span', { className: 'hsp-sub', children:
         statusQ.data
           ? `${statusQ.data.projects} project${statusQ.data.projects === 1 ? '' : 's'} · v${statusQ.data.hermes_version}`
           : (failed ? 'backend unavailable' : 'connecting…') }),
-      jsxs('label', { className: 'hsp-btn hsp-btn-small', title: 'Import a screenplay (Fountain, text, Final Draft .fdx, or PDF)', children: [
+      jsxs('label', { className: 'hsp-btn hsp-btn-small', title: 'Import a screenplay (Fountain, text, Final Draft .fdx, PDF) or a book (Markdown)', children: [
         'Import…',
         jsx('input', { type: 'file', accept: '.fountain,.fdx,.pdf,.txt,.xml,.text,.md,text/plain,application/pdf', style: { display: 'none' }, onChange: onImportFile })
       ] })
@@ -922,12 +940,18 @@ function ScreenplayPane() {
           jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-ghost', onClick: () => setPdf(null), children: 'Dismiss' })
         ] })
     ] }),
-    jsxs('div', { className: 'hsp-export-fountain', children: [
+    !isProse ? jsxs('div', { className: 'hsp-export-fountain', children: [
       jsx('div', { className: 'hsp-list-label', children:
         'Fountain (.fountain) — opens in Fountain, Final Draft, Highland, or any Fountain-compatible tool' }),
       jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy, onClick: () => doExportFountain(),
         children: busy ? 'Preparing…' : 'Export current revision as Fountain' })
     ] })
+      : jsxs('div', { className: 'hsp-export-markdown', children: [
+        jsx('div', { className: 'hsp-list-label', children:
+          'Markdown (.md) — the document’s canonical Markdown source (lossless round-trip)' }),
+        jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy, onClick: () => doExportMarkdown(),
+          children: busy ? 'Preparing…' : 'Export current revision as Markdown' })
+      ] })
   ] })
 
   const emptyProjects = !failed && projectsQ.data && projects.length === 0

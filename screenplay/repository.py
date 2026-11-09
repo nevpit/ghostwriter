@@ -19,10 +19,12 @@ from typing import Optional
 
 from . import models as M
 from . import fountain
+from . import formats
 
 MIGRATIONS = [
     "0001_initial.sql",
     "0002_recoverable_revisions.sql",
+    "0003_format.sql",
 ]
 
 # Resolved from this file so migrations load regardless of how the package is
@@ -31,7 +33,7 @@ _MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
 
 class Repository:
-    def __init__(self, db_path: "str | Path"):
+    def __init__(self, db_path: "str | Path", registry=None):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
@@ -39,15 +41,34 @@ class Repository:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA foreign_keys=ON;")
+        # Per-repo engine registry: get_revision re-derives a revision's block
+        # elements via the owning project's format engine (screenplay by default).
+        self._registry = registry or formats.build_default_registry()
         self._migrate()
 
     # --- lifecycle ----------------------------------------------------------
 
     def _migrate(self) -> None:
+        # Version-aware: apply each migration at most once. 0001 creates the
+        # ``meta`` table, so a fresh DB has no version yet (treated as 0) and the
+        # whole chain runs; a v2/v3 DB skips what it already applied. This makes
+        # the runner safe for both brand-new and previously-migrated databases.
         for name in MIGRATIONS:
+            version = int(name.split("_", 1)[0])
+            if version <= self._current_version():
+                continue
             sql = (_MIGRATIONS_DIR / name).read_text(encoding="utf-8")
             with self._lock, self._conn:
                 self._conn.executescript(sql)
+
+    def _current_version(self) -> int:
+        """Schema version recorded in ``meta`` (0 on a fresh DB, before 0001)."""
+        try:
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        except sqlite3.OperationalError:
+            return 0  # meta table doesn't exist yet
+        return int(row["value"]) if row else 0
 
     def close(self) -> None:
         with self._lock:
@@ -74,9 +95,10 @@ class Repository:
     def create_project(self, p: M.Project) -> None:
         with self._lock, self._conn:
             self._conn.execute(
-                "INSERT INTO projects (id,title,author,active_revision_id,active_rules_id,"
-                "renderer_config,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
-                (p.id, p.title, p.author, p.active_revision_id, p.active_rules_id,
+                "INSERT INTO projects (id,title,author,format,active_revision_id,"
+                "active_rules_id,renderer_config,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (p.id, p.title, p.author, p.format, p.active_revision_id, p.active_rules_id,
                  json.dumps(p.renderer_config), p.created_at, p.updated_at),
             )
 
@@ -93,8 +115,8 @@ class Repository:
         return [self._row_to_project(r) for r in rows]
 
     def touch_project(self, project_id: str, **fields) -> None:
-        allowed = {"title", "author", "active_revision_id", "active_rules_id",
-                   "renderer_config", "updated_at"}
+        allowed = {"title", "author", "format", "active_revision_id",
+                   "active_rules_id", "renderer_config", "updated_at"}
         sets, vals = [], []
         for k, v in fields.items():
             if k in allowed:
@@ -112,6 +134,7 @@ class Repository:
     def _row_to_project(self, row) -> M.Project:
         return M.Project(
             id=row["id"], title=row["title"], author=row["author"],
+            format=row["format"] or "screenplay",
             active_revision_id=row["active_revision_id"],
             active_rules_id=row["active_rules_id"],
             renderer_config=json.loads(row["renderer_config"] or "{}"),
@@ -140,13 +163,33 @@ class Repository:
             origin=row["origin"], created_at=row["created_at"],
         )
         rev.scenes = self._load_scenes(revision_id)
-        # Elements are derived from the immutable snapshot (source of truth);
-        # align by document order (scene_order == parse order).
-        parsed, _problems = fountain.parse(rev.snapshot)
+        # Elements are derived from the immutable snapshot (source of truth). The
+        # snapshot is re-parsed with the *owning project's* format engine (not
+        # hardcoded to Fountain) so non-screenplay projects round-trip too; the
+        # result is aligned onto the stored blocks by document order. Stored
+        # ids/order/heading are authoritative; the fresh parse supplies the
+        # per-block elements/kind/parent_id/meta.
+        parsed = self._parse_snapshot(rev)
         for i, sc in enumerate(rev.scenes):
             if i < len(parsed):
                 sc.elements = parsed[i].elements
+                sc.kind = parsed[i].kind
+                sc.parent_id = parsed[i].parent_id
+                sc.meta = parsed[i].meta
         return rev
+
+    def _parse_snapshot(self, rev: M.Revision) -> list:
+        """Re-derive a revision's blocks by parsing its snapshot with the owning
+        project's format engine. Falls back to the screenplay engine if the
+        project or its format is unknown (defensive)."""
+        project = self.get_project(rev.project_id)
+        fmt = project.format if project else "screenplay"
+        try:
+            eng = self._registry.get(fmt)
+        except Exception:
+            eng = self._registry.get("screenplay")
+        blocks, _problems = eng.parse(rev.snapshot)
+        return list(blocks)
 
     def list_revisions(self, project_id: str) -> list[M.Revision]:
         rows = self._conn.execute(

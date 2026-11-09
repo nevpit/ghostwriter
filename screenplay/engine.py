@@ -78,6 +78,10 @@ class DocumentEngine(abc.ABC):
     name: str = "block"
     #: The :class:`~models.Block.kind` this engine produces (e.g. ``"scene"``).
     block_kind: str = "block"
+    #: Prefix for the engine's positional block ids (``f"{id_prefix}-{n}"``). The
+    #: service's proposal splicer uses it to mint a fresh id for an inserted block
+    #: (screenplay: ``scene``; prose: ``block``).
+    id_prefix: str = "scene"
 
     @abc.abstractmethod
     def parse(self, snapshot: str) -> tuple:
@@ -116,6 +120,12 @@ class DocumentEngine(abc.ABC):
     def import_(self, filename: str, content: bytes) -> str:
         """Convert raw file bytes of a supported *source* format into this
         engine's canonical text (Fountain for the screenplay engine)."""
+
+    def default_settings(self):
+        """The engine's default render settings (a dataclass with ``to_dict()``).
+        The service uses it for PDF export when the caller supplies none, so each
+        engine renders with its own typography rather than a shared default."""
+        return None
 
     def export_formats(self) -> List[str]:
         """Artifact types this engine can emit (e.g. ``["fountain", "pdf"]``).

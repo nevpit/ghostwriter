@@ -207,6 +207,10 @@ class RulesVersion:
     protected: List[ProtectedRange] = field(default_factory=list)
     # Editorial guidance (free text; model-interpreted, e.g. "never show Arthur moving").
     guidance: List[str] = field(default_factory=list)
+    # Format-specific numeric rules (e.g. prose word-count targets, min words per
+    # chapter). Screenplay uses the dedicated fields above; other engines read from
+    # here. Additive and optional so existing rules versions round-trip unchanged.
+    limits: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -215,6 +219,7 @@ class RulesVersion:
             "allowed_speakers": self.allowed_speakers,
             "protected": [p.to_dict() for p in self.protected],
             "guidance": self.guidance,
+            "limits": self.limits,
         }
 
     @classmethod
@@ -230,6 +235,7 @@ class RulesVersion:
             allowed_speakers=d.get("allowed_speakers"),
             protected=[ProtectedRange.from_dict(p) for p in d.get("protected", [])],
             guidance=list(d.get("guidance", [])),
+            limits=dict(d.get("limits", {})),
         )
 
 

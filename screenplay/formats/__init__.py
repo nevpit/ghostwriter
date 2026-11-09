@@ -14,6 +14,7 @@ format-agnostic and need no changes.
 
 from .. import engine
 from .screenplay import ScreenplayEngine
+from .prose import ProseEngine
 
 
 def build_default_registry() -> "engine.EngineRegistry":
@@ -24,5 +25,6 @@ def build_default_registry() -> "engine.EngineRegistry":
     state.
     """
     reg = engine.EngineRegistry()
-    reg.register("screenplay", ScreenplayEngine())
+    for eng in (ScreenplayEngine(), ProseEngine()):
+        reg.register(eng.name, eng)
     return reg

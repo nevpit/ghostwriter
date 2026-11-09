@@ -26,9 +26,11 @@ from .rendering import RenderSettings, RendererError
 from .repository import Repository
 
 
-def _next_id(ids: List[str]) -> str:
-    nums = [int(m.group(1)) for i in ids if (m := re.fullmatch(r"scene-(\d+)", i))]
-    return f"scene-{(max(nums) + 1) if nums else 0}"
+def _next_id(ids: List[str], prefix: str = "scene") -> str:
+    """Mint a fresh block id: the prefix plus one past the highest existing index."""
+    pat = re.compile(re.escape(prefix) + r"-(\d+)")
+    nums = [int(m.group(1)) for i in ids if (m := pat.fullmatch(i))]
+    return f"{prefix}-{(max(nums) + 1) if nums else 0}"
 
 
 def build_diff(base_rev: M.Revision, candidate_scenes: List[M.Scene],
@@ -92,7 +94,8 @@ class ScreenplayService:
         # cannot leave an orphaned project row behind.
         eng = self.registry.get(format or engine.DEFAULT_FORMAT)
         parsed, _problems = eng.parse(fountain_text)
-        p = M.Project(id=M.new_id("proj"), title=title, author=author)
+        p = M.Project(id=M.new_id("proj"), title=title, author=author,
+                      format=format or engine.DEFAULT_FORMAT)
         self.repo.create_project(p)
         rev = self._make_revision(p.id, fountain_text, M.ORIGIN_IMPORT, None,
                                   scenes=parsed)
@@ -110,7 +113,8 @@ class ScreenplayService:
         (Fountain, plain text, Final Draft ``.fdx``, or ``.pdf``). The format is
         detected, converted to Fountain, then imported (the stored revision is
         the converted Fountain, so it round-trips back out to Fountain)."""
-        eng = self.registry.get(format or engine.DEFAULT_FORMAT)
+        fmt = format or self._detect_format(filename or "")
+        eng = self.registry.get(fmt)
         fountain_text = eng.import_(filename or "", content or b"")
         if not (title or "").strip():
             m = re.search(r"^Title:\s*(.+)$", fountain_text, re.M | re.I)
@@ -123,7 +127,17 @@ class ScreenplayService:
                 r"^(?:Credit:\s*)?(?:Written by|written by|story by|Story by)"
                 r"\s*:?\s*([^\r\n]+)", fountain_text, re.M | re.I)
             author = (m.group(1).strip() if m else "")
-        return self.import_project(title, author, fountain_text)
+        return self.import_project(title, author, fountain_text, format=fmt)
+
+    @staticmethod
+    def _detect_format(filename: str) -> str:
+        """Default format for an imported file by extension. Prose extensions
+        (``.md``/``.markdown``/``.docx``) map to the prose engine; everything else
+        keeps the screenplay default, so existing screenplay imports are unchanged."""
+        name = (filename or "").lower()
+        if name.endswith((".md", ".markdown", ".docx")):
+            return "prose"
+        return engine.DEFAULT_FORMAT
 
     def list_projects(self) -> List[M.Project]:
         return self.repo.list_projects()
@@ -229,6 +243,7 @@ class ScreenplayService:
             rv.allowed_speakers = base.allowed_speakers
             rv.protected = base.protected
             rv.guidance = list(base.guidance)
+            rv.limits = dict(base.limits)
         for k, v in changes.items():
             if k == "protected" and v is not None:
                 rv.protected = [d if isinstance(d, M.ProtectedRange) else M.ProtectedRange.from_dict(d)
@@ -269,7 +284,7 @@ class ScreenplayService:
         ok = True
         for op in operations:
             if op.type == "insert":
-                new_id = _next_id(id_list)
+                new_id = _next_id(id_list, eng.id_prefix)
                 pos = len(id_list) if op.before_scene_id is None else id_list.index(op.before_scene_id)
                 id_list.insert(pos, new_id)
             elif op.type != "replace":
@@ -557,7 +572,7 @@ class ScreenplayService:
                    out_dir: Optional[Path] = None) -> M.Export:
         p = self.get_project(project_id)
         rev = self.read_revision(project_id, revision_id or p.active_revision_id)
-        s = settings or self.settings
+        s = settings or self._engine(project=p).default_settings() or self.settings
         out_dir = Path(out_dir) if out_dir else self.exports_dir
         if out_dir is None:
             raise M.ServiceError(M.ERR_RENDERER_UNAVAILABLE, "no export directory configured")
@@ -604,11 +619,32 @@ class ScreenplayService:
             "size_bytes": len(snapshot.encode("utf-8")),
         }
 
+    def export_markdown(self, project_id: str,
+                        revision_id: Optional[str] = None) -> dict:
+        """Serialize a prose revision back to Markdown (the snapshot IS the
+        canonical Markdown, so this is a lossless round-trip). Mirrors
+        :meth:`export_fountain` for the prose format."""
+        p = self.get_project(project_id)
+        rev = self.read_revision(project_id, revision_id or p.active_revision_id)
+        title = (p.title or "document").strip()
+        safe = "".join(c if (c.isalnum() or c in " -_.") else "_" for c in title).strip()
+        filename = (safe or "document") + ".md"
+        snapshot = rev.snapshot
+        return {
+            "project_id": p.id,
+            "revision_id": rev.id,
+            "title": p.title,
+            "author": p.author,
+            "filename": filename,
+            "markdown": snapshot,
+            "size_bytes": len(snapshot.encode("utf-8")),
+        }
+
     def inspect_pages(self, project_id: str, revision_id: Optional[str] = None,
                       settings: Optional[RenderSettings] = None) -> dict:
         p = self.get_project(project_id)
         rev = self.read_revision(project_id, revision_id or p.active_revision_id)
-        s = settings or self.settings
+        s = settings or self._engine(project=p).default_settings() or self.settings
         pages = self._engine(project=p).render_pages(rev.snapshot, s)
         return {"revision_id": rev.id, "page_count": len(pages), "pages": pages}
 

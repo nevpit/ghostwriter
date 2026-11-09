@@ -137,7 +137,7 @@ async def update_rules(project_id: str, request: Request):
     """
     body = await request.json()
     allowed = {"dialogue_block_limit", "page_limit", "allowed_speakers",
-               "protected", "guidance"}
+               "protected", "guidance", "limits"}
     changes = {k: v for k, v in body.items() if k in allowed and v is not None}
     if not changes:
         raise HTTPException(status_code=400, detail={
@@ -163,7 +163,8 @@ async def import_project(request: Request):
                 "details": {"error": str(exc)}})
         p = _guard(get_service().import_file,
                    body.get("filename", ""), content,
-                   body.get("title", ""), body.get("author", ""))
+                   body.get("title", ""), body.get("author", ""),
+                   format=body.get("format"))
     else:
         p = _guard(get_service().import_project,
                    body.get("title", ""), body.get("author", ""),
@@ -249,3 +250,11 @@ def export_fountain(project_id: str, revision_id: Optional[str] = None):
     text + a suggested ``.fountain`` filename). The Desktop pane turns this
     into a file download so the script can be opened in Fountain/Final Draft."""
     return _guard(get_service().export_fountain, project_id, revision_id)
+
+
+@router.get("/projects/{project_id}/markdown")
+def export_markdown(project_id: str, revision_id: Optional[str] = None):
+    """Serialize a prose revision back to Markdown (lossless — the snapshot IS
+    the canonical Markdown). JSON body with the ``markdown`` text + a suggested
+    ``.md`` filename. For screenplay projects this returns the Fountain source."""
+    return _guard(get_service().export_markdown, project_id, revision_id)

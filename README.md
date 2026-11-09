@@ -37,12 +37,15 @@ hermes-screenplay/
     formats/               # one module per supported format
       __init__.py          # build_default_registry() -> EngineRegistry
       screenplay.py        # ScreenplayEngine: Fountain parse/validate/render/import
-    rendering.py           # pure-stdlib Courier PDF writer
+      prose.py             # ProseEngine: Markdown parse/validate/render/import
+      prose_render.py      # pure-stdlib book-style PDF writer (prose)
+    rendering.py           # pure-stdlib Courier PDF writer (screenplay)
     validation.py          # deterministic proposal validator
     runtime.py             # process-wide get_service() singleton + reset_service()
     tools.py               # agent tool handlers + JSON schemas
     migrations/0001_initial.sql
     migrations/0002_recoverable_revisions.sql   # relax UNIQUE content-hash index (recovery)
+    migrations/0003_format.sql                  # add projects.format column (multi-format)
   dashboard/
     manifest.json          # {"name","api"} -> web-server router mount
     plugin_api.py          # FastAPI APIRouter (exec'd by the web server)
@@ -61,9 +64,19 @@ record), splices it by byte offset, and manages revisions / proposals / rules /
 findings. Everything format-specific — parsing into blocks, applying edits,
 validating, rendering to PDF, and importing alternate files — is delegated to a
 `DocumentEngine` (see `screenplay/engine.py`), resolved per project by
-`Project.format`. Screenplay (Fountain) is engine #1, registered under
-`"screenplay"` and delegating to the existing `fountain` / `validation` /
-`rendering` / `importers` modules. New media (novels, docs, video scripts, …)
+`Project.format`. Two engines are registered by default:
+
+- **`screenplay`** (engine #1) — Fountain, delegating to the existing
+  `fountain` / `validation` / `rendering` / `importers` modules.
+- **`prose`** (engine #2) — long-form Markdown books. Parses a document into
+  nestable blocks (`#` part, `##` chapter, `###` section, pre-heading front
+  matter), validates word/part/chapter-count targets from the rules `limits`,
+  renders a book-style PDF (`prose_render.py`), and round-trips losslessly to
+  Markdown.
+
+`import_file` auto-detects the format from the extension (`.md`/`.markdown`/
+`.docx` → prose; everything else → screenplay), and `export_markdown` returns a
+prose document's canonical Markdown. New media (novels, docs, video scripts, …)
 are added by registering another engine under `screenplay/formats/` without
 touching the service core. The agent tool surface and plugin name are unchanged
 in this phase.
