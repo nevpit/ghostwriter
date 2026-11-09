@@ -250,6 +250,7 @@ def parse(snapshot: str):
         scene = M.Scene(
             id=f"scene-{s_no}",
             order=s_no,
+            kind="scene",
             heading=hline.text.strip(),
             start=hline.start,
             end=region_end,

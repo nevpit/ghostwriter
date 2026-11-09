@@ -84,21 +84,32 @@ def sha256_hex(text: str) -> str:
 # --- Core entities ---------------------------------------------------------
 
 @dataclass
-class Scene:
-    """One scene, versioned with a revision.
+class Block:
+    """The general structural node of a document, versioned with a revision.
 
-    ``id`` is stable across a replacement of this scene. ``start``/``end`` are
-    character offsets (half-open) into the owning revision's snapshot. Offsets
-    let us splice a scene's replacement without touching any other byte.
+    A ``Block`` is the unit of structure that every format's engine produces:
+    a screenplay ``Scene`` (``kind="scene"``), a book ``Chapter``, a storyboard
+    ``Frame``, a dialogue-tree ``Node``. Blocks are nestable via ``parent_id``
+    (a chapter under a part, a scene under an episode), which is what lets one
+    codebase cover media with very different hierarchies.
+
+    ``id`` is stable across a replacement of the block. ``start``/``end`` are
+    half-open character offsets into the owning revision's snapshot, so a block
+    can be spliced without touching any other byte. ``title`` is the block's
+    heading/caption; ``elements`` is the typed breakdown within the block.
     """
     id: str
-    order: int
-    heading: str
-    start: int
-    end: int
-    # Element breakdown within this scene (typed parse). Empty when parsing is
-    # incomplete for the scene.
+    kind: str = "block"
+    order: int = 0
+    parent_id: Optional[str] = None
+    title: str = ""
+    start: int = 0
+    end: int = 0
+    # Element breakdown within this block (typed parse). Empty when parsing is
+    # incomplete for the block.
     elements: List[dict] = field(default_factory=list)
+    # Free-form, engine-defined metadata (e.g. a scene's POV, a frame's timing).
+    meta: dict = field(default_factory=dict)
     parse_ok: bool = True
 
     def text(self, snapshot: str) -> str:
@@ -106,10 +117,28 @@ class Scene:
 
 
 @dataclass
+class Scene(Block):
+    """A screenplay block. ``heading`` is the slugline (the INT./EXT. line).
+
+    Subclasses :class:`Block` so the engine contract (which deals in blocks) is
+    satisfied directly by the Fountain parser's output. ``heading`` is the
+    screenplay-specific name the existing API and tools already use; the general
+    ``Block.title`` field is left for formats whose blocks have a plain title.
+    """
+    heading: str = ""
+
+
+@dataclass
 class Project:
     id: str
     title: str
     author: str
+    # The document format this project uses (which engine parses/validates/
+    # renders it). Phase 0: always "screenplay". This field is in-memory for
+    # now -- per-project persistence (a projects.format column) arrives in
+    # Phase 1 alongside the first non-screenplay engine, when a second format
+    # actually needs to be remembered per project.
+    format: str = "screenplay"
     active_revision_id: Optional[str] = None
     active_rules_id: Optional[str] = None
     renderer_config: dict = field(default_factory=dict)

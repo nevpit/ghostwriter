@@ -20,7 +20,8 @@ from typing import List, Optional
 from . import models as M
 from . import fountain
 from . import validation
-from . import rendering
+from . import engine
+from . import formats
 from .rendering import RenderSettings, RendererError
 from .repository import Repository
 
@@ -56,6 +57,21 @@ class ScreenplayService:
         self.repo = repo
         self.exports_dir = Path(exports_dir) if exports_dir else None
         self.settings = RenderSettings()
+        # Per-instance engine registry: the service dispatches every
+        # format-specific operation (parse / splice / validate / render / import)
+        # through the engine registered for the project's ``format``.
+        self.registry = formats.build_default_registry()
+
+    def _engine(self, project_id: Optional[str] = None,
+                project: Optional[M.Project] = None) -> "engine.DocumentEngine":
+        """Resolve the :class:`DocumentEngine` for a project (by its ``format``)."""
+        p = project if project is not None else self.get_project(project_id)
+        fmt = p.format or engine.DEFAULT_FORMAT
+        try:
+            return self.registry.get(fmt)
+        except KeyError:
+            raise M.ServiceError(M.ERR_PARSE_UNSUPPORTED,
+                                 f"no engine registered for format '{fmt}'")
 
     # ---------------- projects ----------------
 
@@ -70,10 +86,12 @@ class ScreenplayService:
         p.active_rules_id = rules.id
         return p
 
-    def import_project(self, title: str, author: str, fountain_text: str) -> M.Project:
+    def import_project(self, title: str, author: str, fountain_text: str,
+                       format: Optional[str] = None) -> M.Project:
         # Fail fast: parse before any DB write so a malformed document
         # cannot leave an orphaned project row behind.
-        parsed, _problems = fountain.parse(fountain_text)
+        eng = self.registry.get(format or engine.DEFAULT_FORMAT)
+        parsed, _problems = eng.parse(fountain_text)
         p = M.Project(id=M.new_id("proj"), title=title, author=author)
         self.repo.create_project(p)
         rev = self._make_revision(p.id, fountain_text, M.ORIGIN_IMPORT, None,
@@ -86,13 +104,14 @@ class ScreenplayService:
         return p
 
     def import_file(self, filename: str, content: bytes,
-                    title: str = "", author: str = "") -> M.Project:
+                    title: str = "", author: str = "",
+                    format: Optional[str] = None) -> M.Project:
         """Import a screenplay from raw file bytes of any supported format
         (Fountain, plain text, Final Draft ``.fdx``, or ``.pdf``). The format is
         detected, converted to Fountain, then imported (the stored revision is
         the converted Fountain, so it round-trips back out to Fountain)."""
-        from . import importers
-        fountain_text = importers.to_fountain(filename or "", content or b"")
+        eng = self.registry.get(format or engine.DEFAULT_FORMAT)
+        fountain_text = eng.import_(filename or "", content or b"")
         if not (title or "").strip():
             m = re.search(r"^Title:\s*(.+)$", fountain_text, re.M | re.I)
             stem = ""
@@ -243,6 +262,7 @@ class ScreenplayService:
         Returns ``(snapshot, scenes, id_list, problems)`` where ``scenes`` carry
         their stable ids and ``problems`` are the candidate's parse problems.
         """
+        eng = self._engine(base_rev.project_id)
         id_list = [s.id for s in base_rev.scenes]
         snapshot = base_rev.snapshot
         scenes = base_rev.scenes
@@ -255,7 +275,7 @@ class ScreenplayService:
             elif op.type != "replace":
                 raise M.ServiceError(M.ERR_INVALID_PROPOSAL, f"bad op type {op.type}")
             try:
-                snapshot, fresh = fountain.apply_operation(snapshot, scenes, op, None)
+                snapshot, fresh = eng.apply_operation(snapshot, scenes, op, None)
             except M.ServiceError:
                 raise
             if len(fresh) != len(id_list):
@@ -265,7 +285,7 @@ class ScreenplayService:
                 sc.id = id_list[i]
             scenes = fresh
 
-        final_scenes, problems = fountain.parse(snapshot)
+        final_scenes, problems = eng.parse(snapshot)
         if not ok or len(final_scenes) != len(id_list):
             # Malformed candidate: keep positional ids, flag it.
             if len(final_scenes) == len(id_list):
@@ -295,8 +315,9 @@ class ScreenplayService:
             raise M.ServiceError(M.ERR_VALIDATION, f"rules {rid} not found")
 
         ops = [M.Operation.from_dict(o) for o in operations]
+        eng = self._engine(project=p)
         snapshot, scenes, _id_list, problems = self._assemble(base_rev, ops)
-        checks = validation.validate_candidate(scenes, snapshot, problems, rules, self.settings)
+        checks = eng.validate(scenes, snapshot, problems, rules, self.settings)
         status = M.BLOCKED if validation.proposal_has_failure(checks) else M.PENDING
         diff = build_diff(base_rev, scenes, snapshot)
 
@@ -376,9 +397,9 @@ class ScreenplayService:
             return prop
         if M.sha256_hex(prop.candidate_snapshot) != prop.candidate_hash:
             raise M.ServiceError(M.ERR_CONFLICT, "candidate snapshot does not match its hash")
-        scenes, problems = fountain.parse(prop.candidate_snapshot)
-        checks = validation.validate_candidate(scenes, prop.candidate_snapshot, problems, rules,
-                                               self.settings)
+        eng = self._engine(project=p)
+        scenes, problems = eng.parse(prop.candidate_snapshot)
+        checks = eng.validate(scenes, prop.candidate_snapshot, problems, rules, self.settings)
         prop.checks = checks
         prop.status = M.BLOCKED if validation.proposal_has_failure(checks) else M.PENDING
         # persist updated checks/status
@@ -421,11 +442,11 @@ class ScreenplayService:
             raise M.ServiceError(M.ERR_CONFLICT, "candidate snapshot does not match its hash")
 
         # Re-run deterministic validation at accept time.
-        scenes, problems = fountain.parse(prop.candidate_snapshot)
+        eng = self._engine(project=p)
+        scenes, problems = eng.parse(prop.candidate_snapshot)
         # re-assign stable ids using stored operations
         _snap, scenes, id_list, problems = self._assemble(base_rev, prop.operations)
-        checks = validation.validate_candidate(scenes, prop.candidate_snapshot, problems, rules,
-                                               self.settings)
+        checks = eng.validate(scenes, prop.candidate_snapshot, problems, rules, self.settings)
         if validation.proposal_has_failure(checks):
             self.repo.set_proposal_status(prop.id, M.BLOCKED)
             prop.checks = checks
@@ -542,7 +563,7 @@ class ScreenplayService:
             raise M.ServiceError(M.ERR_RENDERER_UNAVAILABLE, "no export directory configured")
         out_dir.mkdir(parents=True, exist_ok=True)
         try:
-            pdf_bytes, page_count = rendering.render_pdf(rev.snapshot, s)
+            pdf_bytes, page_count = self._engine(project=p).render_pdf(rev.snapshot, s)
         except RendererError as exc:
             exp = M.Export(id=M.new_id("exp"), project_id=p.id, revision_id=rev.id,
                            renderer_config=s.to_dict(), artifact_path="",
@@ -588,7 +609,7 @@ class ScreenplayService:
         p = self.get_project(project_id)
         rev = self.read_revision(project_id, revision_id or p.active_revision_id)
         s = settings or self.settings
-        pages = rendering.render_pages(rev.snapshot, s)
+        pages = self._engine(project=p).render_pages(rev.snapshot, s)
         return {"revision_id": rev.id, "page_count": len(pages), "pages": pages}
 
     # ---------------- findings ----------------
@@ -613,9 +634,8 @@ class ScreenplayService:
     def _make_revision(self, project_id: str, snapshot: str, origin: str,
                        parent_id: Optional[str],
                        scenes: Optional[List[M.Scene]] = None) -> M.Revision:
-        parsed, _problems = fountain.parse(snapshot)
         if scenes is None:
-            scenes = parsed
+            scenes, _problems = self._engine(project_id).parse(snapshot)
         rev = M.Revision(
             id=M.new_id("rev"), project_id=project_id, parent_id=parent_id,
             snapshot=snapshot, content_hash=M.sha256_hex(snapshot),

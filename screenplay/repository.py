@@ -177,7 +177,7 @@ class Repository:
         ).fetchall()
         return [
             M.Scene(
-                id=r["id"], order=r["scene_order"], heading=r["heading"],
+                id=r["id"], order=r["scene_order"], kind="scene", heading=r["heading"],
                 start=r["start_offset"], end=r["end_offset"],
                 parse_ok=bool(r["parse_ok"]),
             )

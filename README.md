@@ -33,6 +33,10 @@ hermes-screenplay/
     fountain.py            # offset-accurate Fountain parser + op application
     repository.py          # SQLite (WAL) persistence + migrations
     service.py             # project/revision/proposal lifecycle (orchestrator)
+    engine.py              # DocumentEngine ABC + EngineRegistry (format dispatch)
+    formats/               # one module per supported format
+      __init__.py          # build_default_registry() -> EngineRegistry
+      screenplay.py        # ScreenplayEngine: Fountain parse/validate/render/import
     rendering.py           # pure-stdlib Courier PDF writer
     validation.py          # deterministic proposal validator
     runtime.py             # process-wide get_service() singleton + reset_service()
@@ -49,6 +53,20 @@ hermes-screenplay/
     test_*.py              # parser / service / rendering / tools / api
     run_all.py             # no-pytest runner
 ```
+
+## Document engines
+
+The service core is **format-agnostic**: it stores a snapshot (the source of
+record), splices it by byte offset, and manages revisions / proposals / rules /
+findings. Everything format-specific — parsing into blocks, applying edits,
+validating, rendering to PDF, and importing alternate files — is delegated to a
+`DocumentEngine` (see `screenplay/engine.py`), resolved per project by
+`Project.format`. Screenplay (Fountain) is engine #1, registered under
+`"screenplay"` and delegating to the existing `fountain` / `validation` /
+`rendering` / `importers` modules. New media (novels, docs, video scripts, …)
+are added by registering another engine under `screenplay/formats/` without
+touching the service core. The agent tool surface and plugin name are unchanged
+in this phase.
 
 ## Install
 
