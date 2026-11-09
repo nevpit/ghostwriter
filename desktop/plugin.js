@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@hermes/plugin-sdk'
+import { useQuery, useQueryClient, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, KEYBINDS_AREA, host } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useState, useMemo, useEffect, useRef } from 'react'
 
@@ -674,7 +674,7 @@ function ScreenplayPane() {
   const scene = sceneId ? sceneById[sceneId] : null
 
   const header = jsxs('div', { className: 'hsp-header', children: [
-    jsx('div', { className: 'hsp-title', children: 'Screenplay' }),
+    jsx('div', { className: 'hsp-title', children: 'Ghostwriter' }),
     data ? jsx('span', { className: 'hsp-sub', title: 'Document format',
       children: isProse ? 'Prose' : 'Script' }) : null,
     jsxs('div', { className: 'hsp-header-right', children: [
@@ -682,6 +682,12 @@ function ScreenplayPane() {
         statusQ.data
           ? `${statusQ.data.projects} project${statusQ.data.projects === 1 ? '' : 's'} · v${statusQ.data.hermes_version}`
           : (failed ? 'backend unavailable' : 'connecting…') }),
+      jsx('button', {
+        className: 'hsp-btn hsp-btn-small hsp-btn-primary',
+        title: 'Open the Ghostwriter chat session',
+        onClick: openGhostwriterChat,
+        children: '💬 Chat'
+      }),
       jsxs('label', { className: 'hsp-btn hsp-btn-small', title: 'Import a screenplay (Fountain, text, Final Draft .fdx, PDF) or a book (Markdown)', children: [
         'Import…',
         jsx('input', { type: 'file', accept: '.fountain,.fdx,.pdf,.txt,.xml,.text,.md,text/plain,application/pdf', style: { display: 'none' }, onChange: onImportFile })
@@ -1233,6 +1239,36 @@ select.hsp-select option { background: #141418; color: #f0f0f4; }
 .hsp-dd-item-active { background: rgba(255,255,255,0.16); color: #ffffff; font-weight: 600; }
 `
 
+// ---------- Ghostwriter chat session (Design 1) ----------
+// A dedicated, plugin-owned Hermes session the user can talk to from the
+// Chat button / palette / keybind. The model's ghost_* tools operate on the
+// projects this page edits, so the chat and the workspace stay in sync.
+// We adopt an existing "Ghostwriter" session if there is one (so history is
+// preserved across restarts); otherwise we create a fresh one.
+let ghostwriterSessionPromise = null
+function getGhostwriterSession() {
+  if (!ghostwriterSessionPromise) ghostwriterSessionPromise = (async () => {
+    try {
+      const list = await host.request('session.list', {})
+      const sessions = (list && list.sessions) || []
+      const existing = sessions.find((s) => /ghostwriter/i.test(s.title || ''))
+      if (existing) return existing
+    } catch (_) { /* fall through to create */ }
+    const created = await host.request('session.create', { title: 'Ghostwriter' })
+    return created
+  })()
+  return ghostwriterSessionPromise
+}
+async function openGhostwriterChat() {
+  try {
+    const s = await getGhostwriterSession()
+    const sid = s && (s.stored_session_id || s.session_id)
+    if (sid) host.openSession(sid)
+  } catch (e) {
+    console.error('[ghostwriter] open chat failed:', e)
+  }
+}
+
 export default {
   id: ID,
   name: 'Ghostwriter',
@@ -1243,13 +1279,31 @@ export default {
     style.textContent = CSS
     document.head.append(style)
     ctx.onDispose(() => style.remove())
+
+    // Top-level section: a sidebar row that opens a full page in the
+    // workspace pane (like any built-in view), not a docked pane next to the
+    // chat. The user can leave the normal chat untouched and come here only
+    // when they want to work in Ghostwriter.
     ctx.register({
-      id: ID,
-      area: 'panes',
-      order: 50,
-      title: 'Ghostwriter',
-      data: { placement: 'right' },
+      id: `${ID}.route`,
+      area: ROUTES_AREA,
+      data: { path: '/ghostwriter' },
       render: () => jsx(ScreenplayPane, {})
+    })
+    ctx.register({
+      id: `${ID}.nav`,
+      area: SIDEBAR_NAV_AREA,
+      data: { path: '/ghostwriter', label: 'Ghostwriter', codicon: 'writing' }
+    })
+    ctx.register({
+      id: `${ID}.palette`,
+      area: PALETTE_AREA,
+      data: { command: 'ghostwriter.open', label: 'Ghostwriter', run: () => host.navigate('/ghostwriter') }
+    })
+    ctx.register({
+      id: `${ID}.keybind`,
+      area: KEYBINDS_AREA,
+      data: { command: 'ghostwriter.open', label: 'Ghostwriter', run: () => host.navigate('/ghostwriter') }
     })
   }
 }
