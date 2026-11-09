@@ -1,8 +1,8 @@
-"""Dashboard API for the hermes-screenplay plugin.
+"""Dashboard API for the ghostwriter plugin.
 
 This module is **exec'd** (not imported) in the Hermes web-server process. It
 must expose a module-level ``router`` (a FastAPI ``APIRouter``); the web server
-mounts it at ``/api/plugins/hermes-screenplay/<route>``.
+mounts it at ``/api/plugins/ghostwriter/<route>``.
 
 The desktop pane (``desktop/plugin.js``) reaches these routes through the
 authenticated desktop API bridge (``window.hermesDesktop.api``), which injects
@@ -55,7 +55,7 @@ def _guard(fn, *a, **k):
 @router.get("/status")
 def status():
     projects = get_service().list_projects()
-    return {"plugin": "hermes-screenplay",
+    return {"plugin": "ghostwriter",
             "hermes_version": M.HERMES_VERSION,
             "projects": len(projects),
             "project_ids": [p.id for p in projects]}

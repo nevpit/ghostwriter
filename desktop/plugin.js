@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useState, useMemo, useEffect, useRef } from 'react'
 
-const ID = 'hermes-screenplay'
+const ID = 'ghostwriter'
 const API = `/api/plugins/${ID}`
 
 // The desktop API bridge is the sanctioned door to this plugin's backend. It
@@ -1235,8 +1235,8 @@ select.hsp-select option { background: #141418; color: #f0f0f4; }
 
 export default {
   id: ID,
-  name: 'Screenplay',
-  description: 'Local screenplay workspace: script view, scene editor, proposal review, rules, history, and PDF export.',
+  name: 'Ghostwriter',
+  description: 'Ghostwriter: a local writing workspace for screenplays and prose — parse, revise, propose, validate, and export PDF/Markdown.',
   defaultEnabled: true,
   register(ctx) {
     const style = document.createElement('style')
@@ -1247,7 +1247,7 @@ export default {
       id: ID,
       area: 'panes',
       order: 50,
-      title: 'Screenplay',
+      title: 'Ghostwriter',
       data: { placement: 'right' },
       render: () => jsx(ScreenplayPane, {})
     })

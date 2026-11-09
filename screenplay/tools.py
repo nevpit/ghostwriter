@@ -1,4 +1,4 @@
-"""Agent-facing tools for the hermes-screenplay plugin.
+"""Agent-facing tools for the ghostwriter plugin.
 
 Every handler takes the tool's argument dict and returns a JSON string:
 ``{"success": true, ...}`` on success, or ``{"success": false, "code", "error",
@@ -74,7 +74,7 @@ def _rev_header(r) -> dict:
 def _status(args):
     svc = get_service()
     projects = svc.list_projects()
-    return _ok(plugin="hermes-screenplay", hermes_version=HERMES_VERSION,
+    return _ok(plugin="ghostwriter", hermes_version=HERMES_VERSION,
                projects=len(projects), project_ids=[p.id for p in projects])
 
 
@@ -180,41 +180,41 @@ _OP_ITEM = {
 }
 
 TOOLS = [
-    ("screenplay_status",
-     _schema("screenplay_status",
+    ("ghost_status",
+     _schema("ghost_status",
              "Read-only status of the screenplay plugin: backend liveness, active "
              "Hermes version, and the count + ids of all projects.", {}),
      _status, "🎬"),
-    ("screenplay_list_projects",
-     _schema("screenplay_list_projects",
+    ("ghost_list_projects",
+     _schema("ghost_list_projects",
              "List all screenplay projects (id, title, author, active revision).", {}),
      _list_projects, "📚"),
-    ("screenplay_get_project",
-     _schema("screenplay_get_project",
+    ("ghost_get_project",
+     _schema("ghost_get_project",
              "Full detail for one project: header, active revision with its scenes, "
              "and revision count.",
              {"project_id": {"type": "string"}}, required=["project_id"]),
      _get_project, "📄"),
-    ("screenplay_history",
-     _schema("screenplay_history",
+    ("ghost_history",
+     _schema("ghost_history",
              "Revision history for a project (newest first).",
              {"project_id": {"type": "string"}}, required=["project_id"]),
      _history, "🕘"),
-    ("screenplay_read_scene",
-     _schema("screenplay_read_scene",
+    ("ghost_read_scene",
+     _schema("ghost_read_scene",
              "Read one scene (heading + ordered elements) from a revision.",
              {"project_id": {"type": "string"}, "revision_id": {"type": "string"},
               "scene_id": {"type": "string"}},
              required=["project_id", "revision_id", "scene_id"]),
      _read_scene, "🎭"),
-    ("screenplay_import",
-     _schema("screenplay_import",
+    ("ghost_import",
+     _schema("ghost_import",
              "Import Fountain text as a new project with a v1 revision.",
              {"title": {"type": "string"}, "author": {"type": "string"},
               "fountain_text": {"type": "string"}}, required=["fountain_text"]),
      _import, "📥"),
-    ("screenplay_propose",
-     _schema("screenplay_propose",
+    ("ghost_propose",
+     _schema("ghost_propose",
              "Propose scene insert/replace operations against the active revision. "
              "Returns a proposal to check, then accept or reject.",
              {"project_id": {"type": "string"},
@@ -222,40 +222,40 @@ TOOLS = [
               "base_revision_id": {"type": "string"}},
              required=["project_id", "operations"]),
      _propose, "✏️"),
-    ("screenplay_check_proposal",
-     _schema("screenplay_check_proposal",
+    ("ghost_check_proposal",
+     _schema("ghost_check_proposal",
              "Run deterministic validation checks on a pending proposal and return "
              "the findings.",
              {"proposal_id": {"type": "string"}}, required=["proposal_id"]),
      _check_proposal, "🔍"),
-    ("screenplay_accept_proposal",
-     _schema("screenplay_accept_proposal",
+    ("ghost_accept_proposal",
+     _schema("ghost_accept_proposal",
              "Accept a proposal: applies its operations atomically and creates the "
              "new revision.",
              {"proposal_id": {"type": "string"}}, required=["proposal_id"]),
      _accept_proposal, "✅"),
-    ("screenplay_reject_proposal",
-     _schema("screenplay_reject_proposal",
+    ("ghost_reject_proposal",
+     _schema("ghost_reject_proposal",
              "Reject a pending proposal (no revision is created).",
              {"proposal_id": {"type": "string"}, "reason": {"type": "string"}},
              required=["proposal_id"]),
      _reject_proposal, "❌"),
-    ("screenplay_export_pdf",
-     _schema("screenplay_export_pdf",
+    ("ghost_export_pdf",
+     _schema("ghost_export_pdf",
              "Export a revision (default: active) to a stdlib-rendered PDF. Returns "
              "the file path.",
              {"project_id": {"type": "string"}, "revision_id": {"type": "string"}},
              required=["project_id"]),
      _export_pdf, "📄"),
-    ("screenplay_restore",
-     _schema("screenplay_restore",
+    ("ghost_restore",
+     _schema("ghost_restore",
              "Restore an earlier snapshot as a NEW active revision. The current head "
              "is preserved in history; scene ids stay stable.",
              {"project_id": {"type": "string"}, "revision_id": {"type": "string"}},
              required=["project_id", "revision_id"]),
      _restore, "⏪"),
-    ("screenplay_undo",
-     _schema("screenplay_undo",
+    ("ghost_undo",
+     _schema("ghost_undo",
              "Undo the latest change against an unchanged head: create a new active "
              "revision whose content is the state before the latest change.",
              {"project_id": {"type": "string"}}, required=["project_id"]),

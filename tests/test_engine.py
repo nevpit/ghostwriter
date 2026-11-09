@@ -17,7 +17,7 @@ def test_default_format_is_screenplay():
     assert engine.DEFAULT_FORMAT == "screenplay"
 
 
-def test_default_registry_registers_screenplay_engine():
+def test_default_registry_registers_ghostwriter_engine():
     reg = formats.build_default_registry()
     assert "screenplay" in reg.names()
     eng = reg.get("screenplay")
@@ -42,7 +42,7 @@ def test_unknown_format_is_rejected():
         pass
 
 
-def test_screenplay_engine_parse_returns_blocks():
+def test_ghostwriter_engine_parse_returns_blocks():
     scenes, _problems = ScreenplayEngine().parse(B.SAMPLE_FOUNTAIN)
     assert scenes, "expected at least one block"
     for sc in scenes:

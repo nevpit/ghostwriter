@@ -43,7 +43,7 @@ def test_status():
     assert r.status_code == 200
     d = r.json()
     assert d["projects"] >= 1 and d["hermes_version"]
-    assert d["plugin"] == "hermes-screenplay"
+    assert d["plugin"] == "ghostwriter"
 
 
 def test_projects_bare_array():

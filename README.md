@@ -1,4 +1,4 @@
-# hermes-screenplay
+# ghostwriter
 
 A local screenplay workspace for Hermes Agent: Fountain parsing, immutable
 revisions, a proposal workflow with deterministic validation, and stdlib PDF
@@ -25,7 +25,7 @@ Tested against **Hermes v0.22.7** (git install `b200f5bc60e3`).
 ## Repository layout
 
 ```
-hermes-screenplay/
+ghostwriter/
   plugin.yaml              # manifest: name, version, provides_tools
   __init__.py              # agent entry point: register(ctx) -> 13 tools
   screenplay/              # the service package (pure stdlib)
@@ -98,27 +98,27 @@ local folder is installed by copy + enable:
 
 ```bash
 # 1) copy into the user plugin dir (strip build artifacts)
-cp -r hermes-screenplay ~/.hermes/plugins/
-find ~/.hermes/plugins/hermes-screenplay -name __pycache__ -type d -exec rm -rf {} +
+cp -r ghostwriter ~/.hermes/plugins/
+find ~/.hermes/plugins/ghostwriter -name __pycache__ -type d -exec rm -rf {} +
 
 # 2) enable it (adds it to plugins.enabled in config.yaml)
-hermes plugins enable hermes-screenplay
+hermes plugins enable ghostwriter
 
 # 3) verify the real runtime loads it (13 tools registered)
-hermes plugins doctor hermes-screenplay
+hermes plugins doctor ghostwriter
 ```
 
 - Agent tools become available on the **next agent session** (the gateway
   defers tool registration across a live reload).
 - The **desktop pane** materializes when the desktop app refreshes its plugin
   list (app restart, or opening the pane area); it is copied into
-  `~/.hermes/desktop-plugins/hermes-screenplay/` with a `.hermes-package.json`
+  `~/.hermes/desktop-plugins/ghostwriter/` with a `.hermes-package.json`
   marker.
-- Data lives under `~/.hermes/plugin-data/hermes-screenplay/` (profile-scoped,
+- Data lives under `~/.hermes/plugin-data/ghostwriter/` (profile-scoped,
   survives updates).
 
-To uninstall: `hermes plugins disable hermes-screenplay` (or `remove`) and delete
-`~/.hermes/plugins/hermes-screenplay/`.
+To uninstall: `hermes plugins disable ghostwriter` (or `remove`) and delete
+`~/.hermes/plugins/ghostwriter/`.
 
 ## Tests
 
@@ -126,7 +126,7 @@ No `pytest` required — the suite runs on plain Python (each test is also
 pytest-compatible):
 
 ```bash
-python hermes-screenplay/tests/run_all.py
+python ghostwriter/tests/run_all.py
 ```
 
 Covers: Fountain parsing (offsets, element typing, extensions), service
@@ -141,19 +141,19 @@ All in toolset `screenplay`, returning JSON `{"success": ...}`:
 
 | Tool | Purpose |
 |------|---------|
-| `screenplay_status` | plugin + version + project count |
-| `screenplay_import` | import Fountain text as a new project (v1) |
-| `screenplay_list_projects` | list projects |
-| `screenplay_get_project` | project + active revision + scene index |
-| `screenplay_history` | immutable revision history (dicts) |
-| `screenplay_read_scene` | one scene's typed elements |
-| `screenplay_propose` | propose insert/replace operations |
-| `screenplay_check_proposal` | run deterministic validation |
-| `screenplay_accept_proposal` | accept → new immutable revision |
-| `screenplay_reject_proposal` | reject (reason recorded, no revision) |
-| `screenplay_export_pdf` | export active/any revision to PDF |
-| `screenplay_restore` | restore an earlier snapshot as a new revision |
-| `screenplay_undo` | restore the previous revision (undo the latest change) |
+| `ghost_status` | plugin + version + project count |
+| `ghost_import` | import Fountain text as a new project (v1) |
+| `ghost_list_projects` | list projects |
+| `ghost_get_project` | project + active revision + scene index |
+| `ghost_history` | immutable revision history (dicts) |
+| `ghost_read_scene` | one scene's typed elements |
+| `ghost_propose` | propose insert/replace operations |
+| `ghost_check_proposal` | run deterministic validation |
+| `ghost_accept_proposal` | accept → new immutable revision |
+| `ghost_reject_proposal` | reject (reason recorded, no revision) |
+| `ghost_export_pdf` | export active/any revision to PDF |
+| `ghost_restore` | restore an earlier snapshot as a new revision |
+| `ghost_undo` | restore the previous revision (undo the latest change) |
 
 ## Implementation notes
 
@@ -176,6 +176,6 @@ All in toolset `screenplay`, returning JSON `{"success": ...}`:
   here via the real-loader `doctor` (13 tools), the `TestClient` router tests,
   and the live gateway mounting the route (HTTP 401 auth gate, not 404).
 - The **agent-in-the-loop** turn (the configured model itself calling
-  `screenplay_propose` with generated text) is not exercised headlessly; the 13
+  `ghost_propose` with generated text) is not exercised headlessly; the 13
   tools are registered and the full service workflow they drive is demonstrated
   end-to-end.

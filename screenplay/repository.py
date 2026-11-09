@@ -1,7 +1,7 @@
 """SQLite persistence for the screenplay service.
 
 Path-injectable so it is testable headless (``Repository(tmp_path/"t.db")``);
-production resolves the real path via ``plugin_data_dir("hermes-screenplay")``.
+production resolves the real path via ``plugin_data_dir("ghostwriter")``.
 
 WAL mode + a re-entrant lock give safe concurrent reads and serialized writes
 within one process. Each profile has its own data dir, so cross-profile

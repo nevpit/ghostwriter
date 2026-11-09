@@ -1,1 +1,1 @@
-# Test package for the hermes-screenplay plugin.
+# Test package for the ghostwriter plugin.
