@@ -1243,28 +1243,47 @@ select.hsp-select option { background: #141418; color: #f0f0f4; }
 // A dedicated, plugin-owned Hermes session the user can talk to from the
 // Chat button / palette / keybind. The model's ghost_* tools operate on the
 // projects this page edits, so the chat and the workspace stay in sync.
-// We adopt an existing "Ghostwriter" session if there is one (so history is
-// preserved across restarts); otherwise we create a fresh one.
+//
+// Identity is by TITLE, mirroring the built-in Bot Chat's canonical
+// forever-chat: the gateway's exact-title index makes "Ghostwriter" a stable
+// registry, so every open consults it directly. That lookup is window-free and
+// reaches the row even when the session is idle/closed across an app restart —
+// a plain live `session.list` scan would miss it there and mint a duplicate.
+// We adopt the existing row when present (history survives restarts) and only
+// create when there is none.
+const GHOSTWRITER_TITLE = 'Ghostwriter'
 let ghostwriterSessionPromise = null
-function getGhostwriterSession() {
-  if (!ghostwriterSessionPromise) ghostwriterSessionPromise = (async () => {
-    try {
-      const list = await host.request('session.list', {})
-      const sessions = (list && list.sessions) || []
-      const existing = sessions.find((s) => /ghostwriter/i.test(s.title || ''))
-      if (existing) return existing
-    } catch (_) { /* fall through to create */ }
-    const created = await host.request('session.create', { title: 'Ghostwriter' })
-    return created
-  })()
-  return ghostwriterSessionPromise
+async function getGhostwriterSession() {
+  try {
+    // Indexed `WHERE title = ?` (not a live listing): reaches idle rows.
+    // include_hidden guards a future hidden flag; 200 mirrors the core picker.
+    const list = await host.request('session.list', {
+      title: GHOSTWRITER_TITLE,
+      limit: 200,
+      include_hidden: true,
+    })
+    const sessions = (list && list.sessions) || []
+    const existing = sessions.find((s) =>
+      /ghostwriter/i.test(s.root_title || s.title || '')
+    )
+    if (existing) return existing
+  } catch (_) {
+    // A transient lookup failure (backend mid-warm) falls through to create;
+    // project data lives in the DB, not the session, so a fresh chat is safe.
+  }
+  return host.request('session.create', { title: GHOSTWRITER_TITLE })
 }
 async function openGhostwriterChat() {
+  if (!ghostwriterSessionPromise) ghostwriterSessionPromise = getGhostwriterSession()
   try {
-    const s = await getGhostwriterSession()
-    const sid = s && (s.stored_session_id || s.session_id)
+    const s = await ghostwriterSessionPromise
+    if (!s) return
+    // Adopted rows carry the compression-lineage tip as resolved_id (open the
+    // tip); a fresh create reports stored_session_id. Bare id is the fallback.
+    const sid = s.resolved_id || s.stored_session_id || s.id || s.session_id
     if (sid) host.openSession(sid)
   } catch (e) {
+    ghostwriterSessionPromise = null // let a later click retry a failed open
     console.error('[ghostwriter] open chat failed:', e)
   }
 }
