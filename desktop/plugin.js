@@ -105,6 +105,69 @@ function FullScene({ scene, index }) {
   ] })
 }
 
+// ---------- format view packs ----------
+// How the pane renders a format's blocks in the reading view and labels them in
+// the navigator. Each pack provides:
+//   Block({scene, index}) -> component for the full-manuscript scroll view; it
+//     must carry data-scene-id so the scroll-spy and the Edit prefill work.
+//   navText(scene)        -> the spans for one navigator row.
+// The screenplay pack reuses FullScene + the existing row (identical output);
+// the prose pack renders book conventions (Part / Chapter / Section). New
+// formats add a pack here keyed by their engine `name`.
+
+function ProsePara({ e }) {
+  const t = e.text == null ? '' : String(e.text)
+  if (!t.trim()) return null
+  return jsx('div', { className: 'prose-para', children: t })
+}
+
+// One prose block (Part / Chapter / Section / front matter) in the scroll view.
+// It layers book styling on hsp-full-scene (inheriting spacing + the
+// data-scene-id hook the scroll-spy and edit prefill rely on).
+function ProseBlock({ scene, index }) {
+  const kind = scene.kind || 'front'
+  const paras = Array.isArray(scene.elements) ? scene.elements : []
+  const titleCls = {
+    part: 'prose-title-part',
+    chapter: 'prose-title-chapter',
+    section: 'prose-title-section',
+  }[kind]
+  const kids = []
+  if (scene.heading) {
+    kids.push(jsx('div', { className: titleCls || '', children: scene.heading }, 'title'))
+  }
+  paras.forEach((p, j) => {
+    if (p && p.kind === 'paragraph') kids.push(jsx(ProsePara, { e: p, key: 'p' + j }))
+  })
+  return jsx('div', {
+    className: 'hsp-full-scene prose-block prose-block-' + kind,
+    'data-scene-id': scene.id,
+    children: kids,
+  })
+}
+
+const NAV_KIND_TAG = { part: 'Pt', chapter: 'Ch', section: '§', front: '·' }
+
+const VIEW_PACKS = {
+  screenplay: {
+    Block: FullScene,
+    navText: (s) => [
+      jsx('span', { className: 'hsp-nav-idx', children: String((s.order || 0) + 1) }),
+      jsx('span', { children: s.heading || '(untitled)' }),
+    ],
+  },
+  prose: {
+    Block: ProseBlock,
+    navText: (s) => {
+      const kind = s.kind || 'front'
+      return [
+        jsx('span', { className: 'hsp-nav-idx', children: NAV_KIND_TAG[kind] || '·' }),
+        jsx('span', { className: 'prose-nav-title prose-nav-' + kind, children: s.heading || '(untitled)' }),
+      ]
+    },
+  },
+}
+
 // ---------- status chip ----------
 
 function Chip({ kind, children }) {
@@ -232,6 +295,7 @@ function ScreenplayPane() {
   const activeRevId = data ? data.active_revision_id : null
   const projectFormat = (data && data.project && data.project.format) || 'screenplay'
   const isProse = projectFormat === 'prose'
+  const pack = VIEW_PACKS[projectFormat] || VIEW_PACKS.screenplay
 
   // Auto-select a project; drop selection if it disappeared.
   useEffect(() => {
@@ -686,10 +750,7 @@ function ScreenplayPane() {
                     requireSaved(() => goToSceneNow(s.id),
                       `jumping to “${s.heading || 'untitled'}”`)
                   },
-                  children: jsxs('span', { className: 'hsp-nav-text', children: [
-                    jsx('span', { className: 'hsp-nav-idx', children: String(s.order + 1) }),
-                    jsx('span', { children: s.heading || '(untitled)' })
-                  ] })
+                  children: jsxs('span', { className: 'hsp-nav-text', children: pack.navText(s) })
                 })) }),
               // scene area: header + full-script scroll view (or the editor)
               jsxs('div', { className: 'hsp-scenearea', children: [
@@ -718,9 +779,11 @@ function ScreenplayPane() {
                       ] })
                     ] })
                   : jsxs('div', { className: 'hsp-full', ref: fullRef, onScroll: onFullScroll, children: [
-                      scenes.map((s, i) => jsx(FullScene, { scene: s, index: i, key: s.id })),
+                      scenes.map((s, i) => jsx(pack.Block, { scene: s, index: i, key: s.id })),
                       jsx('div', { className: 'hsp-hint hsp-full-hint', children:
-                        'Scroll to read the whole script — the list highlights the scene at the top edge. Click a scene to jump; use Edit to change it.' })
+                        isProse
+                          ? 'Scroll to read the whole manuscript — the list highlights the block at the top edge. Click a block to jump; use Edit to change it.'
+                          : 'Scroll to read the whole script — the list highlights the scene at the top edge. Click a scene to jump; use Edit to change it.' })
                     ] })
               ] })
             ] })
@@ -1098,6 +1161,18 @@ select.hsp-select option { background: #141418; color: #f0f0f4; }
 .f-paren { text-align: center; font-style: italic; padding: 0 26%; opacity: 0.9; }
 .f-dialogue { text-align: center; padding: 0 14%; }
 .f-trans { text-align: right; font-weight: 600; }
+/* Prose (book) reading view — layered on hsp-full-scene so the scroll-spy and
+   spacing work for free; override the monospace with a book-like serif and add
+   part/chapter/section hierarchy. */
+.prose-block { font-family: Georgia, 'Times New Roman', serif; font-size: 13px; line-height: 1.6; }
+.prose-block-part { padding-top: 30px; }
+.prose-title-part { text-align: center; font-size: 22px; font-weight: 600; letter-spacing: 0.01em; padding: 6px 0 2px; }
+.prose-title-chapter { text-align: center; font-size: 17px; font-weight: 600; padding: 2px 0; }
+.prose-title-section { font-size: 13.5px; font-weight: 700; padding-top: 10px; }
+.prose-para { text-indent: 1.4em; margin: 0 0 8px; }
+.prose-nav-title { font-weight: 600; }
+.prose-nav-chapter { margin-left: 12px; }
+.prose-nav-section { margin-left: 24px; font-weight: 400; opacity: 0.85; }
 .hsp-raw { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; margin: 0; opacity: 0.9; }
 .hsp-editor { display: flex; flex-direction: column; gap: 8px; }
 .hsp-textarea { width: 100%; box-sizing: border-box; min-height: 260px; resize: vertical; background: transparent; color: inherit; border: 1px solid color-mix(in oklab, currentColor 22%, transparent); border-radius: 8px; padding: 8px; font-family: 'Courier New', ui-monospace, monospace; font-size: 12.5px; line-height: 1.5; }
