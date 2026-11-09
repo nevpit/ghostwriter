@@ -81,6 +81,15 @@ are added by registering another engine under `screenplay/formats/` without
 touching the service core. The agent tool surface and plugin name are unchanged
 in this phase.
 
+The desktop pane is format-aware too: it dispatches on `Project.format` to a
+per-format **view pack** (`VIEW_PACKS` in `desktop/plugin.js`) that supplies how
+that format's blocks render in the reading view and how they're labelled in the
+navigator. The screenplay pack reproduces the Fountain reading view exactly; the
+prose pack renders book conventions (centered part/chapter titles, indented
+justified serif paragraphs, a navigator indented by part/chapter/section).
+Export is format-aware as well (Fountain vs Markdown), and a header badge shows
+the active format. Unknown formats fall back to the screenplay pack.
+
 ## Install
 
 The plugin is a **user plugin** — drop it in the user plugin dir and enable it.
