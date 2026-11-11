@@ -51,99 +51,30 @@ const TABS = [
   ['export', 'Export'],
 ]
 
-// ---------- view preferences (theme, font, size) ----------
-// The manuscript is rendered in a theme + typeface the reader chooses, and the
-// choice persists in localStorage so it survives restarts. "default" font
-// follows the format's own convention (Courier for a screenplay); an explicit
-// pick overrides it. Everything here is plain CSS + vanilla JS — no dependencies.
+// ---------- view preferences (paper tone, size) ----------
+// Persisted in localStorage so they survive restarts.
 const VIEW_KEY = 'gw.view.v1'
 const FONTS = {
-  ui: 'inherit', // chrome inherits the host theme's default font (no hardcoded face)
+  ui: 'inherit', // chrome inherits the host theme's font
   script: '"Courier Prime", "Courier New", Courier, monospace',
 }
-// Paper tones for the manuscript page (display preference; default pale blue).
 const PAPER = {
-  blue:  { label: 'Pale blue', bg: '#DCEBF0' },  // brand --pale-blue
-  cream: { label: 'Cream',     bg: '#F1EBDD' },  // brand --paper-cream
-  pink:  { label: 'Light pink', bg: '#F6DEE8' }, // light pink
-  white: { label: 'White',     bg: '#FFFFFF' },  // brand --white
+  blue:  { label: 'Pale blue', bg: '#DCEBF0' },
+  cream: { label: 'Cream',     bg: '#F1EBDD' },
+  pink:  { label: 'Light pink', bg: '#F6DEE8' },
+  white: { label: 'White',     bg: '#FFFFFF' },
 }
 const PAPER_ORDER = ['blue', 'cream', 'pink', 'white']
-// ---- standard Fountain title page ----
-// A Fountain title page is the block of "Key: Value" metadata lines at the very
-// top of the document (before the first scene heading). Renderers show it as a
-// standalone FIRST page: the title in the upper third, the credit/author in the
-// middle, and the contact (address / email / phone) in the bottom-left corner.
-const TITLE_FIELDS = ['Title', 'Author', 'Source', 'Draft date', 'Address', 'Email', 'Phone', 'Contact']
-// Centered block: the title (upper third) and the credit/author lines (middle).
-const CENTER_FIELDS = ['Title', 'Author', 'Source', 'Draft date']
-// Contact block: rendered in the bottom-left corner of the title page.
-const CONTACT_FIELDS = ['Address', 'Email', 'Phone', 'Contact']
-// Parse the leading title-page metadata. Returns { fields, order, bodyStart }:
-// `fields` maps each metadata key to its value, `order` lists the keys in their
-// original order, and `bodyStart` is the char offset of the first non-metadata
-// line (the body, incl. any "FADE IN:" transition).
-function parseTitlePage(fountain) {
-  const src = String(fountain == null ? '' : fountain)
-  const lines = src.split(/\r?\n/)
-  const metaRe = /^[A-Za-z][A-Za-z ]*?:\s*\S/
-  let k = 0
-  for (let i = 0; i < lines.length; i++) {
-    const ln = lines[i]
-    if (ln.trim() === '') { k = i + 1; continue }   // blank within the region
-    if (metaRe.test(ln)) { k = i + 1; continue }     // "Key: value" line
-    break                                            // first body line
-  }
-  const fields = {}
-  const order = []
-  let off = 0
-  let metaEnd = 0  // offset right after the last "Key: Value" line (incl. its \n)
-  for (let i = 0; i < k; i++) {
-    const m = lines[i].match(/^([A-Za-z][A-Za-z ]*?):\s*(.*)$/)
-    if (m && m[1].trim()) {
-      const key = m[1].trim()
-      if (!(key in fields)) order.push(key)
-      fields[key] = m[2].trim()
-    }
-    off += lines[i].length + 1  // +1 = newline
-    if (m && m[1].trim()) metaEnd = off
-  }
-  return { fields, order, metaEnd, bodyStart: off }
-}
-// Build a standard Fountain title-page block (metadata lines, single-newline
-// separated). The standard fields come first (in the standard order); any extra
-// fields follow in their original order, so no metadata is ever dropped.
-// `title` is { fields, order }. Returns '' when nothing is filled in.
-function buildTitleBlock(title) {
-  const fields = (title && title.fields) ? title.fields : (title || {})
-  const order = (title && title.order) ? title.order : Object.keys(fields)
-  const out = []
-  const seen = new Set()
-  for (const key of TITLE_FIELDS) {
-    const v = fields[key]
-    if (v != null && String(v).trim()) { out.push(key + ': ' + String(v).trim()); seen.add(key) }
-  }
-  for (const key of order) {
-    if (seen.has(key)) continue
-    const v = fields[key]
-    if (v != null && String(v).trim()) out.push(key + ': ' + String(v).trim())
-  }
-  return out.join('\n')
-}
-const FONT_LABELS = { default: 'Auto', serif: 'Serif', sans: 'Sans', mono: 'Mono' }
-const SIZES = { s: '11.5px', m: '13px', l: '15px', xl: '17px' }
-const SIZE_LABELS = { s: 'S', m: 'M', l: 'L', xl: 'XL' }
-const DEFAULT_VIEW = { theme: 'dark', font: 'default', size: 13, paper: 'blue' }
+const DEFAULT_VIEW = { size: 13, paper: 'blue' }
 function loadView() {
   let v = { ...DEFAULT_VIEW }
   try {
     const r = localStorage.getItem(VIEW_KEY)
     if (r) v = { ...DEFAULT_VIEW, ...JSON.parse(r) }
-  } catch (_) { /* corrupt store: fall back to defaults */ }
-  // Migrate the old letter size (s/m/l/xl) to a numeric px value for the slider.
-  if (typeof v.size === 'string' && SIZES[v.size]) v.size = parseFloat(SIZES[v.size])
-  if (!Number.isFinite(Number(v.size))) v.size = 13
-  v.size = Math.round(Number(v.size) * 2) / 2
+  } catch (_) { /* corrupt store: defaults */ }
+  const n = Number(v.size)
+  v.size = Number.isFinite(n) ? Math.min(18, Math.max(11, Math.round(n * 2) / 2)) : 13
+  if (!PAPER[v.paper]) v.paper = 'blue'
   return v
 }
 function saveView(v) { try { localStorage.setItem(VIEW_KEY, JSON.stringify(v)) } catch (_) {} }
@@ -152,138 +83,186 @@ function useGwView() {
   const update = (patch) => setView(v => { const n = { ...v, ...patch }; saveView(n); return n })
   return [view, update]
 }
-// The manuscript is always Courier Prime (the standard screenplay face); the chrome inherits the host theme's default font.
-function effectiveFont(view) { return FONTS.script }
 
-// ---------- formatted reading view (Fountain conventions) ----------
+// ---------- title page ----------
+// The backend parses the title page (``title_page.fields`` = [{key, value}],
+// ``title_page.end`` = offset where the script body starts); the pane only
+// lays it out and, in the editor, re-serializes it.
+const TITLE_FIELDS = ['Title', 'Credit', 'Author', 'Source', 'Draft date', 'Contact']
+const CENTER_KEYS = ['title', 'credit', 'author', 'authors', 'source']
+const RIGHT_KEYS = ['draft date', 'date', 'revision', 'copyright']
 
-function El({ e, sceneId, elIndex }) {
-  const search = useContext(SearchCtx)
+function titleMap(tp) {
+  const out = {}
+  for (const f of ((tp && tp.fields) || [])) out[f.key] = f.value
+  return out
+}
+// Serialize {key: value} to a Fountain title page (multi-line values indented).
+function buildTitleBlock(fields, order) {
+  const keys = []
+  for (const k of TITLE_FIELDS) if (k in fields) keys.push(k)
+  for (const k of (order || Object.keys(fields))) if (!keys.includes(k) && k in fields) keys.push(k)
+  const out = []
+  for (const k of keys) {
+    const lines = String(fields[k] == null ? '' : fields[k]).split('\n').map(s => s.trim()).filter(Boolean)
+    if (!lines.length) continue
+    if (lines.length === 1) out.push(k + ': ' + lines[0])
+    else { out.push(k + ':'); for (const l of lines) out.push('    ' + l) }
+  }
+  return out.join('\n')
+}
+
+// ---------- Fountain emphasis ----------
+// *italic*, **bold**, ***both***, _underline_ (a marker toggles only when it
+// has a partner, as in the PDF renderer); [[notes]] and /* boneyard */ hidden.
+function Inline({ text }) {
+  const src = String(text == null ? '' : text).replace(/\[\[[\s\S]*?\]\]/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
+  const out = []
+  let buf = ''
+  let st = 0 // 1 bold, 2 italic, 4 underline
+  const flush = () => {
+    if (!buf) return
+    const style = {}
+    if (st & 1) style.fontWeight = 700
+    if (st & 2) style.fontStyle = 'italic'
+    if (st & 4) style.textDecoration = 'underline'
+    out.push(st ? jsx('span', { style, key: out.length, children: buf }) : buf)
+    buf = ''
+  }
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]
+    if (c === '\\' && (src[i + 1] === '*' || src[i + 1] === '_')) { buf += src[i + 1]; i++; continue }
+    if (c === '*') {
+      let j = i; while (src[j] === '*') j++
+      const run = Math.min(j - i, 3)
+      const bit = run === 1 ? 2 : run === 2 ? 1 : 3
+      if ((st & bit) === bit || src.indexOf('*'.repeat(run), i + run) !== -1) {
+        flush(); st ^= bit; i += run - 1; continue
+      }
+    } else if (c === '_') {
+      if ((st & 4) || src.indexOf('_', i + 1) !== -1) { flush(); st ^= 4; continue }
+    }
+    buf += c
+  }
+  flush()
+  return out
+}
+
+// ---------- formatted reading view ----------
+
+const NON_PRINTING = { section: 1, synopsis: 1, note: 1, boneyard: 1 }
+const KIND_CLASS = {
+  scene_heading: 'f-scene', action: 'f-action', character: 'f-char', parenthetical: 'f-paren',
+  dialogue: 'f-dialogue', transition: 'f-trans', centered: 'f-centered', lyric: 'f-lyric',
+  section: 'f-section', synopsis: 'f-synopsis', note: 'f-note', boneyard: 'f-boneyard',
+  page_break: 'f-pagebreak',
+}
+function cueText(t) {
+  let s = String(t || '').trim()
+  if (s.startsWith('@')) s = s.slice(1).trim()
+  if (s.endsWith('^')) s = s.slice(0, -1).trim()
+  return s
+}
+// What an element shows when no search is active.
+function displayText(e) {
   const t = e.text == null ? '' : String(e.text)
-  const sceneHits = (search && sceneId != null && elIndex != null) ? search.matchesByScene[sceneId] : null
-  const hits = sceneHits ? sceneHits[elIndex] : null
-  const cm = search ? search.currentMatch : -1
-  // Highlight a single-line block. `text` is the rendered (possibly uppercased)
-  // text; the hit offsets were computed on the raw text (same length, so they
-  // still line up).
-  const hl = (text) => (hits && text) ? renderHighlighted(text, hits, cm) : text
-  // Highlight a multi-line block (dialogue): map each hit onto its line.
-  const hlLines = (text) => {
-    const lines = String(text).split('\n')
-    if (!hits || !hits.length) return lines.map((line, i) => jsx('div', { key: i, children: line }))
-    let lineStart = 0
-    return lines.map((line, i) => {
-      const lineEnd = lineStart + line.length
-      const lineHits = hits
-        .filter((h) => h.start >= lineStart && h.end <= lineEnd)
-        .map((h) => ({ start: h.start - lineStart, end: h.end - lineStart, globalIndex: h.globalIndex }))
-      lineStart = lineEnd + 1
-      return jsx('div', { key: i, children: lineHits.length ? renderHighlighted(line, lineHits, cm) : line })
-    })
-  }
   switch (e.kind) {
-    case 'scene_heading':
-      return jsx('div', { className: 'f-scene', children: hl(t.toUpperCase()) })
-    case 'character':
-      return jsx('div', { className: 'f-char', children: hl(t.toUpperCase()) })
-    case 'parenthetical':
-      return jsx('div', { className: 'f-paren', children: hl(t) })
-    case 'dialogue':
-      return jsx('div', { className: 'f-dialogue', children: hlLines(t) })
-    case 'transition':
-      return jsx('div', { className: 'f-trans', children: hl(t.toUpperCase()) })
-    default:
-      return jsx('div', { className: 'f-action', children: hl(t) })
+    case 'scene_heading': return (e.forced ? (e.heading || t) : (e.heading || t).toUpperCase())
+    case 'character': return cueText(t)
+    case 'transition': return t.toUpperCase()
+    default: return t
   }
 }
 
-function SceneView({ scene }) {
-  const allEls = Array.isArray(scene.elements) && scene.elements.length ? scene.elements : null
-  // Skip the leading scene_heading element — it's already the title above.
-  const bodyEls = allEls ? allEls.filter((e) => e.kind !== 'scene_heading') : null
-  return jsxs('div', { className: 'hsp-scene', children: [
-    jsx('div', { className: 'hsp-scene-title', children:
-      (scene.heading || '(untitled scene)') + (scene.parse_ok === false ? '  ⚠ parse issues' : '') }),
-    (bodyEls && bodyEls.length)
-      ? bodyEls.map((e, i) => jsx(El, { e, key: i }))
-      : (allEls ? null : jsx('pre', { className: 'hsp-raw', children: scene.text || '' }))
-  ] })
+function El({ e, group, elIndex }) {
+  const search = useContext(SearchCtx)
+  const groupHits = search ? search.matchesByGroup[group] : null
+  const hits = groupHits ? groupHits[elIndex] : null
+  const cls = KIND_CLASS[e.kind] || 'f-action'
+  const extra = (e.kind === 'character' && e.dual ? ' f-dual' : '')
+    + (e.kind === 'transition' && /^FADE IN/i.test(String(e.text || '').trim()) ? ' f-trans-left' : '')
+  if (e.kind === 'page_break') return jsx('div', { className: cls, title: 'Page break' })
+  let children
+  if (hits && hits.length) {
+    // Searching: show the raw element text so highlight offsets line up.
+    children = renderHighlighted(String(e.text || ''), hits, search.currentMatch)
+  } else if (e.kind === 'scene_heading' || e.kind === 'character' || e.kind === 'transition') {
+    children = displayText(e)
+  } else {
+    children = jsx(Inline, { text: e.text })
+  }
+  const label = e.kind === 'section' ? '#'.repeat(e.depth || 1) + ' ' : e.kind === 'synopsis' ? '= ' : ''
+  return jsxs('div', { className: cls + extra, title: NON_PRINTING[e.kind] ? 'Not printed' : undefined,
+    children: [label, children] })
 }
 
-// ---- title page (standard screenplay format, its own first page) ----
-// Layout matches the industry-standard title page: the title in the upper third,
-// the credit/author (and optional source / draft date) in the middle, and the
-// contact block (address / email / phone) in the bottom-left corner. The block
-// is a full page tall so it reads as a standalone first page.
-function TitlePageView({ fields, order }) {
-  if (!fields) return null
-  const allKeys = (order && order.length) ? order : Object.keys(fields)
-  const title = fields.Title
-  const creditKeys = CENTER_FIELDS.slice(1).filter((k) => fields[k])   // Author, Source, Draft date
-  const contactKeys = CONTACT_FIELDS.filter((k) => fields[k])
-  const extraKeys = allKeys.filter((k) => TITLE_FIELDS.indexOf(k) === -1 && fields[k])
-  if (!title && !creditKeys.length && !contactKeys.length && !extraKeys.length) return null
+function TitlePageView({ titlePage }) {
+  const fields = (titlePage && titlePage.fields) || []
+  if (!fields.length) return null
+  const low = {}
+  for (const f of fields) low[f.key.toLowerCase()] = f.value
+  const credit = low.credit || ((low.author || low.authors) ? 'Written by' : '')
+  const author = low.author || low.authors
+  const left = fields.filter(f => !CENTER_KEYS.includes(f.key.toLowerCase()) && !RIGHT_KEYS.includes(f.key.toLowerCase()))
+  const right = fields.filter(f => RIGHT_KEYS.includes(f.key.toLowerCase()))
+  const lines = (v) => String(v || '').split('\n').map((l, i) => jsx('div', { key: i, children: jsx(Inline, { text: l }) }))
+  const known = ['contact', 'address', 'email', 'phone', 'notes']
   return jsxs('div', { className: 'hsp-titlepage', children: [
     jsx('div', { className: 'hsp-titlepage-spacer' }),
-    title ? jsx('div', { className: 'hsp-titlepage-title', children: title }) : null,
-    creditKeys.length ? jsx('div', { className: 'hsp-titlepage-credit', children:
-      creditKeys.map((k) => jsx('div', { className: 'hsp-titlepage-line', key: k,
-        children: (k === 'Author' ? 'Written by ' + fields[k] : fields[k]) })) }) : null,
+    low.title ? jsx('div', { className: 'hsp-titlepage-title', children: lines(low.title) }) : null,
+    credit ? jsx('div', { className: 'hsp-titlepage-line hsp-titlepage-credit', children: lines(credit) }) : null,
+    author ? jsx('div', { className: 'hsp-titlepage-line', children: lines(author) }) : null,
+    low.source ? jsx('div', { className: 'hsp-titlepage-line hsp-titlepage-credit', children: lines(low.source) }) : null,
     jsx('div', { className: 'hsp-titlepage-grow' }),
-    (contactKeys.length || extraKeys.length) ? jsx('div', { className: 'hsp-titlepage-contact', children: [
-      ...contactKeys.map((k) => jsx('div', { className: 'hsp-titlepage-contact-line', key: k, children: fields[k] })),
-      ...extraKeys.map((k) => jsx('div', { className: 'hsp-titlepage-contact-line', key: k, children: k + ': ' + fields[k] })),
-    ] }) : null,
+    jsxs('div', { className: 'hsp-titlepage-corners', children: [
+      jsx('div', { className: 'hsp-titlepage-contact', children: left.map((f, i) => jsx('div', { key: i,
+        children: lines(known.includes(f.key.toLowerCase()) ? f.value : f.key + ': ' + f.value) })) }),
+      jsx('div', { className: 'hsp-titlepage-contact hsp-titlepage-right', children: right.map((f, i) => jsx('div', { key: i, children: lines(f.value) })) }),
+    ] }),
   ] })
 }
 
-// One editable element in the formatted editor: an auto-sizing textarea styled
-// exactly like the read view's element (same .f-* class), so the standard
-// screenplay formatting stays visible while editing.
+// One editable element in the formatted editor: an auto-sizing textarea with
+// the same .f-* class as the read view, so the page layout stays visible.
 function EditElement({ kind, value, onChange }) {
-  const cls = {
-    scene_heading: 'f-scene', character: 'f-char', parenthetical: 'f-paren',
-    dialogue: 'f-dialogue', transition: 'f-trans'
-  }[kind] || 'f-action'
   const text = value == null ? '' : String(value)
+  const ref = useRef(null)
+  // Auto-size to the wrapped content (rows alone would clip wrapped lines).
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = el.scrollHeight + 'px'
+  })
   return jsx('textarea', {
-    className: 'hsp-edit-el ' + cls,
+    ref,
+    className: 'hsp-edit-el ' + (KIND_CLASS[kind] || 'f-action') + (kind === 'transition' && /^FADE IN/i.test(text.trim()) ? ' f-trans-left' : ''),
     value: text,
-    rows: Math.max(1, text.split('\n').length),
-    spellCheck: false,
+    rows: 1,
+    spellCheck: true,
     onChange: (e) => onChange(e.target.value),
-    onPaste: (e) => {
-      // keep edits plain-text (Fountain is source, not rich text)
-      e.preventDefault()
-      const plain = (e.clipboardData || window.clipboardData).getData('text/plain')
-      if (plain != null) onChange(text.slice(0, e.target.selectionStart) + plain + text.slice(e.target.selectionEnd))
-    },
   })
 }
-// The editable title-page fields (in the formatted editor). Each standard
-// Fountain metadata field is a labeled input; the contact block (address /
-// email / phone) is grouped separately since it sits bottom-left on the page.
-function TitlePageEditor({ fields, order, onChange }) {
-  const input = (key, ph, cls) => jsx('input', {
+
+function TitlePageEditor({ fields, onChange }) {
+  const input = (key, ph, cls, multi) => jsx(multi ? 'textarea' : 'input', {
     className: 'hsp-titlepage-input' + (cls ? ' ' + cls : ''),
-    type: 'text',
-    value: (fields && fields[key]) || '',
+    type: multi ? undefined : 'text',
+    rows: multi ? Math.max(2, String(fields[key] || '').split('\n').length) : undefined,
+    value: fields[key] || '',
     placeholder: ph,
-    spellCheck: false,
     onChange: (e) => onChange(key, e.target.value),
   })
-  const extra = (order || []).filter((k) => TITLE_FIELDS.indexOf(k) === -1 && fields && fields[k])
+  const extra = Object.keys(fields).filter((k) => !TITLE_FIELDS.includes(k))
   return jsxs('div', { className: 'hsp-titlepage hsp-titlepage-edit', children: [
     input('Title', 'Title', 'hsp-titlepage-input-title'),
-    input('Author', 'Author  (shown as "Written by …" on the title page)'),
-    input('Source', 'Source  (e.g. Based on a novel by …)'),
+    input('Credit', 'Credit (e.g. Written by)'),
+    input('Author', 'Author'),
+    input('Source', 'Source (e.g. Based on the novel by …)'),
     input('Draft date', 'Draft date'),
-    jsx('div', { className: 'hsp-titlepage-contact-edit', children: [
+    jsxs('div', { className: 'hsp-titlepage-contact-edit', children: [
       jsx('div', { className: 'hsp-titlepage-contact-label', children: 'Contact · bottom-left of the title page' }),
-      input('Address', 'Address'),
-      input('Email', 'Email'),
-      input('Phone', 'Phone'),
-      input('Contact', 'Contact  (any other contact line)'),
+      input('Contact', 'Name, email, phone — one per line', null, true),
     ] }),
     ...extra.map((k) => jsxs('div', { className: 'hsp-titlepage-extra', key: k, children: [
       jsx('span', { className: 'hsp-titlepage-extra-key', children: k + ':' }),
@@ -292,12 +271,10 @@ function TitlePageEditor({ fields, order, onChange }) {
   ] })
 }
 
-// ---------- search / find & replace ----------
-// Search hits are computed client-side over the *visible* text (each scene's
-// slugline + body-element text), so a hit maps 1:1 onto a rendered node — no
-// snapshot-offset bookkeeping. The replace operates on the raw Fountain source
-// (via the snapshot endpoint); for a word search the Nth visible hit == the Nth
-// source occurrence, so "replace current" is unambiguous.
+// ---------- search ----------
+// Hits are computed over each element's raw text in document order (preamble,
+// then every scene) -- the same order the backend's structure-aware replace
+// uses, so a hit's global index addresses the same occurrence on the server.
 const SearchCtx = createContext(null)
 
 function findMatchesInText(text, query) {
@@ -315,8 +292,6 @@ function findMatchesInText(text, query) {
   return hits
 }
 
-// Render `text` with each hit wrapped in <mark class="hsp-mark">. Hits carry
-// {start, end, globalIndex}; the current hit gets .hsp-mark-current.
 function renderHighlighted(text, hits, currentMatch) {
   if (!hits || !hits.length) return text
   const out = []
@@ -325,8 +300,7 @@ function renderHighlighted(text, hits, currentMatch) {
     if (h.start > pos) out.push(text.slice(pos, h.start))
     out.push(jsx('mark', {
       className: 'hsp-mark' + (h.globalIndex === currentMatch ? ' hsp-mark-current' : ''),
-      key: 'm' + i,
-      'data-match': h.globalIndex,
+      key: 'm' + i, 'data-match': h.globalIndex,
       children: text.slice(h.start, h.end),
     }))
     pos = h.end
@@ -335,73 +309,29 @@ function renderHighlighted(text, hits, currentMatch) {
   return out
 }
 
-// Case-insensitive replace in `text`. `occurrence` is 'all' or a 0-based index
-// (replace only the Nth occurrence). Returns {text, count, replaced}.
-function replaceInText(text, query, replacement, occurrence) {
-  const q = String(query || '').toLowerCase()
-  if (!q) return { text, count: 0, replaced: 0 }
-  const lower = String(text).toLowerCase()
-  let result = ''
-  let i = 0, count = 0, replaced = 0
-  for (;;) {
-    const idx = lower.indexOf(q, i)
-    if (idx === -1) break
-    count++
-    if (occurrence === 'all' || count - 1 === occurrence) {
-      result += text.slice(i, idx) + replacement
-      replaced++
-    } else {
-      result += text.slice(i, idx + q.length)
-    }
-    i = idx + q.length
-  }
-  result += text.slice(i)
-  return { text: result, count, replaced }
-}
-
-// One scene in the full-script scroll view: a labelled section whose
-// elements render with the same Fountain styling, carrying data-scene-id so
-// the scroll-spy can tell which scene is under the top edge.
+// One scene on the page: every element (heading included) in screenplay
+// layout, with the scene number in the left gutter. data-scene-id drives the
+// scroll-spy.
 function FullScene({ scene, index }) {
-  const search = useContext(SearchCtx)
-  const allEls = Array.isArray(scene.elements) && scene.elements.length ? scene.elements : null
-  // The heading is already shown in the labelled section header above; skip the
-  // leading scene_heading element so it doesn't render a second time.
-  const bodyEls = allEls ? allEls.filter((e) => e.kind !== 'scene_heading') : null
-  // Heading highlight: the slugline renders uppercased; hits were computed on
-  // the raw heading (same offsets, so they line up).
-  let headingContent = scene.heading || '(untitled scene)'
-  if (search && scene.heading) {
-    const sceneHits = search.matchesByScene[scene.id]
-    const hits = sceneHits ? sceneHits.heading : null
-    if (hits) headingContent = renderHighlighted(scene.heading.toUpperCase(), hits, search.currentMatch)
-  }
+  const els = Array.isArray(scene.elements) ? scene.elements : []
+  const num = (scene.meta && scene.meta.scene_number) || String(index + 1)
   return jsxs('div', { className: 'hsp-full-scene', 'data-scene-id': scene.id, children: [
-    jsxs('div', { className: 'hsp-full-heading', children: [
-      jsx('span', { className: 'hsp-full-idx', children: String(index + 1) }),
-      jsx('span', { className: 'hsp-full-title', children: headingContent }),
-      scene.parse_ok === false ? jsx('span', { className: 'hsp-hint', children: '  ⚠ parse issues' }) : null
-    ] }),
-    (bodyEls && bodyEls.length)
-      ? bodyEls.map((e, i) => jsx(El, { e, sceneId: scene.id, elIndex: i, key: i }))
-      : (allEls ? null : jsx('pre', { className: 'hsp-raw', children: scene.text || '' }))
+    jsx('span', { className: 'hsp-scene-num', children: num }),
+    scene.parse_ok === false ? jsx('div', { className: 'hsp-hint', children: '⚠ This scene contains unclosed /* or [[ markup.' }) : null,
+    els.length
+      ? els.map((e, i) => jsx(El, { e, group: scene.id, elIndex: i, key: i }))
+      : jsx('pre', { className: 'hsp-raw', children: scene.text || '' }),
   ] })
 }
 
 // ---------- format view packs ----------
-// How the pane renders a format's blocks in the reading view and labels them in
-// the navigator. Each pack provides:
-//   Block({scene, index}) -> component for the full-manuscript scroll view; it
-//     must carry data-scene-id so the scroll-spy and the Edit prefill work.
-//   navText(scene)        -> the spans for one navigator row.
-// The MVP ships the screenplay pack only. New formats add a pack here keyed by
-// their engine `name`.
-
+// How a format's blocks render in the reading view and in the outline. The MVP
+// ships the screenplay pack; new formats add a pack keyed by engine name.
 const VIEW_PACKS = {
   screenplay: {
     Block: FullScene,
     navText: (s) => [
-      jsx('span', { className: 'hsp-nav-idx', children: String((s.order || 0) + 1) }),
+      jsx('span', { className: 'hsp-nav-idx', children: (s.meta && s.meta.scene_number) || String((s.order || 0) + 1) }),
       jsx('span', { children: s.heading || '(untitled)' }),
     ],
   },
@@ -434,7 +364,7 @@ function statusKind(s) {
 // dropdown is plain DOM, so its colors are fully themeable and always
 // high-contrast. It keeps the same "switching projects" unsaved-change guard.
 
-function ProjectPicker({ projects, value, onChange, onNew, onImport, importAccept }) {
+function ProjectPicker({ projects, value, onChange, onNew, onImport, importAccept, onDelete }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
   const fileRef = useRef(null)
@@ -467,13 +397,15 @@ function ProjectPicker({ projects, value, onChange, onNew, onImport, importAccep
         className: 'hsp-dd-item hsp-dd-item-act', role: 'option', key: 'new',
         onClick: () => { setOpen(false); onNew() }, children: '＋  New project…'
       }),
-      onImport && jsxs('span', {
+      onImport && jsx('button', {
         className: 'hsp-dd-item hsp-dd-item-act', role: 'option', key: 'import',
-        onClick: () => { if (fileRef.current) fileRef.current.click() }, children: [
-          '⤓  Import…',
-          jsx('input', { ref: fileRef, type: 'file', accept: importAccept || '', style: { display: 'none' }, onChange: onImport })
-        ] })
-    ] })
+        onClick: () => { setOpen(false); if (fileRef.current) fileRef.current.click() },
+        children: '⤓  Import file (Fountain, Final Draft, PDF)…' }),
+      (onDelete && value) && jsx('button', {
+        className: 'hsp-dd-item hsp-dd-item-act hsp-dd-item-danger', role: 'option', key: 'delete',
+        onClick: () => { setOpen(false); onDelete(value) }, children: '🗑  Delete this project…' }),
+    ] }),
+    onImport && jsx('input', { ref: fileRef, type: 'file', accept: importAccept || '', style: { display: 'none' }, onChange: onImport })
   ] })
 }
 
@@ -494,6 +426,7 @@ function ScreenplayPane() {
   const [rulesForm, setRulesForm] = useState(null)
   const [pdf, setPdf] = useState(null)           // { loading, meta, dataUrl, error }
   const [confirmId, setConfirmId] = useState(null) // history row awaiting confirm
+  const [confirmDelete, setConfirmDelete] = useState(null) // project id awaiting delete confirm
   const [importPanel, setImportPanel] = useState(null) // { name, title, author, text }
   const [newProject, setNewProject] = useState(null) // { title, author, format, text }
   const [view, updateView] = useGwView()               // { theme, font, size } — persisted
@@ -567,72 +500,59 @@ function ScreenplayPane() {
   const projects = Array.isArray(projectsQ.data) ? projectsQ.data : []
   const data = projectQ.data
   const scenes = (data && Array.isArray(data.active_revision?.scenes)) ? data.active_revision.scenes : []
-  // Title-page metadata (lines before the first scene), parsed client-side from
-  // the raw snapshot so the manuscript can render a standard title page.
-  const titlePage = (data && data.active_revision && data.active_revision.snapshot)
-    ? parseTitlePage(data.active_revision.snapshot)
-    : { fields: {}, order: [] }
-  // Whole-document word count, shown in the status bar at the bottom of the paper.
+  const titlePage = (data && data.title_page) || { fields: [], end: 0 }
+  const preamble = (data && Array.isArray(data.preamble)) ? data.preamble : []
+  // Word count over printed elements (status bar).
   const wordCount = useMemo(() => {
     let n = 0
-    for (const s of scenes) n += String(s.text || '').split(/\s+/).filter(Boolean).length
+    const count = (e) => { if (!NON_PRINTING[e.kind]) n += String(e.text || '').split(/\s+/).filter(Boolean).length }
+    preamble.forEach(count)
+    for (const s of scenes) (s.elements || []).forEach(count)
     return n
-  }, [scenes])
+  }, [scenes, preamble])
   const sceneById = useMemo(
     () => Object.fromEntries(scenes.map(s => [s.id, s])),
     [scenes])
   const activeRevId = data ? data.active_revision_id : null
-  // Track the freshest active revision id for find & replace. It mirrors the
-  // query value but is also bumped from each successful snapshot write, so a
-  // quick follow-up replace never sends a stale base (STALE_REVISION) while the
-  // project query is still refetching.
+  // Freshest active revision id for writes: mirrors the query value but is
+  // bumped by each successful write, so a quick follow-up edit never sends a
+  // stale base while the project query is still refetching.
   const activeRevIdRef = useRef(activeRevId)
   useEffect(() => { activeRevIdRef.current = activeRevId }, [activeRevId])
   const projectFormat = (data && data.project && data.project.format) || 'screenplay'
   const pack = VIEW_PACKS[projectFormat] || VIEW_PACKS.screenplay
 
-  // ---- search / find & replace (feature #2) ----
-  // Search hits, computed over the *visible* text (each scene's slugline + body
-  // elements), in document order. Each hit carries a global index (0..N-1) that
-  // drives the next/prev highlight and "replace current".
+  // ---- search / find & replace ----
+  // Hits over every element's raw text, in document order (preamble, then each
+  // scene); each carries a global index used for next/prev and "replace current".
   const matches = useMemo(() => {
     if (!searchQuery) return []
     const all = []
     let gi = 0
-    for (const scene of scenes) {
-      const heading = scene.heading || ''
-      if (heading) {
-        for (const h of findMatchesInText(heading, searchQuery)) {
-          all.push({ scene_id: scene.id, el: 'heading', start: h.start, end: h.end, globalIndex: gi++ })
-        }
-      }
-      const bodyEls = (scene.elements || []).filter((e) => e.kind !== 'scene_heading')
-      bodyEls.forEach((e, i) => {
-        const t = e.text == null ? '' : String(e.text)
-        if (!t) return
-        for (const h of findMatchesInText(t, searchQuery)) {
-          all.push({ scene_id: scene.id, el: i, start: h.start, end: h.end, globalIndex: gi++ })
+    const groups = [['preamble', preamble]].concat(scenes.map(s => [s.id, s.elements || []]))
+    for (const [group, els] of groups) {
+      els.forEach((e, i) => {
+        for (const h of findMatchesInText(e.text, searchQuery)) {
+          all.push({ group, el: i, start: h.start, end: h.end, globalIndex: gi++ })
         }
       })
     }
     return all
-  }, [searchQuery, scenes])
+  }, [searchQuery, scenes, preamble])
 
-  // Group hits by scene so the renderers can look up their own hits (the
-  // slugline is keyed under the string 'heading', body elements under their index).
-  const matchesByScene = useMemo(() => {
+  const matchesByGroup = useMemo(() => {
     const map = {}
     for (const m of matches) {
-      if (!map[m.scene_id]) map[m.scene_id] = {}
-      if (!map[m.scene_id][m.el]) map[m.scene_id][m.el] = []
-      map[m.scene_id][m.el].push(m)
+      if (!map[m.group]) map[m.group] = {}
+      if (!map[m.group][m.el]) map[m.group][m.el] = []
+      map[m.group][m.el].push(m)
     }
     return map
   }, [matches])
 
   const searchState = useMemo(
-    () => (searchQuery ? { query: searchQuery, matchesByScene, currentMatch } : null),
-    [searchQuery, matchesByScene, currentMatch]
+    () => (searchQuery ? { query: searchQuery, matchesByGroup, currentMatch } : null),
+    [searchQuery, matchesByGroup, currentMatch]
   )
 
   // Move the highlighted hit by one step (wrapping around).
@@ -642,27 +562,16 @@ function ScreenplayPane() {
     setCurrentMatch(((base + delta) % matches.length + matches.length) % matches.length)
   }
 
-  // Find & replace: edit the raw Fountain source. For a word search the Nth
-  // visible hit == the Nth source occurrence, so this is unambiguous. The title
-  // page (metadata before the first scene) is left untouched so the hit count
-  // matches what's visible.
+  // Find & replace runs on the backend, which keeps cues/headings upper-case
+  // and enumerates matches in the same order as the highlights above.
   const doReplace = async (occurrence) => {
     if (!pid || !searchQuery || busy) return
-    // The "Replace" button passes the 'current' sentinel for the highlighted
-    // hit; resolve it to that hit's global index. replaceInText only understands
-    // 'all' or a numeric index, so passing 'current' through verbatim matched
-    // nothing and always reported "No replacement made."
     const target = occurrence === 'current' ? currentMatch : occurrence
     if (target !== 'all' && (!Number.isInteger(target) || target < 0)) {
       setNotice({ kind: 'err', text: 'Nothing highlighted to replace.' })
       return
     }
     setBusy(true)
-    // Delegate to the backend's structure-aware replace. It matches at the
-    // element level in the same document order as the highlights and
-    // uppercases a matching character-cue name, so the all-caps cue (and the
-    // rest of the Fountain formatting) is preserved. The old blind client-side
-    // string replace lowercased character cues and collapsed dialogue into action.
     const call = (revId) => api(`/projects/${encodeURIComponent(pid)}/replace`, {
       method: 'POST',
       body: { query: searchQuery, replacement: replaceQuery || '', target, revision_id: revId },
@@ -672,8 +581,9 @@ function ScreenplayPane() {
       try {
         res = await call(activeRevIdRef.current)
       } catch (e) {
-        // A stale base (e.g. the agent saved in the meantime) is recoverable:
-        // resync to the current active revision and retry once.
+        // "Replace all" is safe to retry on a newer revision; a single
+        // highlighted hit may point elsewhere now, so that one is not retried.
+        if (errInfo(e).code !== 'STALE_REVISION' || target !== 'all') throw e
         const p = await api(`/projects/${encodeURIComponent(pid)}`)
         activeRevIdRef.current = p && p.active_revision_id
         res = await call(activeRevIdRef.current)
@@ -765,7 +675,7 @@ function ScreenplayPane() {
   const dirty = !!(draft && draft.changed)
 
   function invalidateAll() {
-    qc.invalidateQueries({ queryKey: [ID] })
+    return qc.invalidateQueries({ queryKey: [ID] })
   }
 
   function requireSaved(next, label) {
@@ -822,85 +732,77 @@ function ScreenplayPane() {
     }
   }
 
-  // Edit the ENTIRE document: fetch the raw Fountain source and open a full
-  // editor over it. Saving writes a new revision through the snapshot endpoint
-  // (the same door find & replace uses), so the whole script updates at once —
-  // not just the one scene on screen.
-  async function startEdit() {
-    if (!pid || editing) return
-    setBusy(true)
-    try {
-      const r = await api(`/projects/${pid}/fountain`, { method: 'GET' })
-      const txt = (r && r.fountain != null) ? String(r.fountain) : ''
-      // Structured edit model: title-page fields + every element (with its
-      // [start,end) snapshot offsets) grouped by scene. Saving splices each
-      // element's text back into the snapshot at its original offset, so the
-      // standard formatting is preserved and an unchanged edit round-trips
-      // byte-for-byte.
-      const { fields, order: titleOrder, metaEnd } = parseTitlePage(txt)
-      const structure = []
-      for (const s of scenes) {
-        const els = (Array.isArray(s.elements) && s.elements.length ? s.elements : [])
-          .map((e, j) => ({ key: s.id + ':' + j, start: e.start, end: e.end, kind: e.kind, text: e.text == null ? '' : String(e.text) }))
-        structure.push({ id: s.id, order: s.order || 0, elements: els })
-      }
-      const values = {}
-      for (const sc of structure) for (const e of sc.elements) values[e.key] = e.text
-      setDraft({ base: txt, baseRev: activeRevIdRef.current, title: { fields: { ...fields }, order: titleOrder }, metaEnd, structure, values, changed: false })
-      setEditing(true)
-    } catch (e) {
-      setNotice({ kind: 'err', text: `Could not load the script for editing: ${errInfo(e).text}` })
-    } finally {
-      setBusy(false)
-    }
+  // Edit the whole document. Two modes:
+  //   'formatted' -- one field per element, laid out like the page; saving
+  //                  splices only the changed elements back at their offsets,
+  //                  so untouched text round-trips byte-for-byte.
+  //   'source'    -- the raw Fountain text in one editor.
+  function startEdit(mode) {
+    if (!pid || editing || !data) return
+    const base = String(data.active_revision.snapshot || '')
+    const groups = [{ id: 'preamble', elements: preamble }].concat(scenes.map(s => ({ id: s.id, elements: s.elements || [] })))
+    const structure = groups.map(g => ({
+      id: g.id,
+      elements: g.elements.map((e, j) => ({ key: g.id + ':' + j, start: e.start, end: e.end, kind: e.kind,
+        text: base.slice(e.start, e.end) })),
+    }))
+    const values = {}
+    for (const g of structure) for (const e of g.elements) values[e.key] = e.text
+    setDraft({ mode: mode === 'source' ? 'source' : 'formatted', base, baseRev: activeRevIdRef.current,
+      title: titleMap(titlePage), titleOrder: (titlePage.fields || []).map(f => f.key), titleEnd: titlePage.end || 0,
+      titleChanged: false, structure, values, source: base, changed: false })
+    setEditing(true)
   }
 
-  // Reconstruct the Fountain source from the structured edit model: the standard
-  // title-page block is (re)written, and each element's text is spliced back into
-  // the snapshot at its original [start,end) offset — preserving blank lines and
-  // the standard formatting. An unchanged edit round-trips byte-for-byte.
   function buildDocFromDraft(d) {
+    if (d.mode === 'source') return d.source
     const base = d.base
-    const titleBlock = buildTitleBlock(d.title)
-    const metaEnd = d.metaEnd || 0
-    const els = []
-    for (const sc of d.structure) for (const e of sc.elements) els.push(e)
-    if (!els.length) return titleBlock
-    let body = ''
-    let cursor = 0
-    for (const e of els) {
-      const v = d.values[e.key] != null ? String(d.values[e.key]) : e.text
-      body += base.slice(cursor, e.start) + v
-      cursor = e.end
+    let out = ''
+    let cursor = d.titleEnd
+    if (d.titleChanged) {
+      const block = buildTitleBlock(d.title, d.titleOrder)
+      out = block ? block + '\n\n' : ''
+    } else {
+      out = base.slice(0, d.titleEnd)
     }
-    body += base.slice(cursor)
-    // Replace the metadata block [0, metaEnd) with the new title block; keep the
-    // pre-first-scene gap (blank lines + any "FADE IN:" transition) byte-exact.
-    const pre = base.slice(metaEnd, els[0].start)
-    return (titleBlock ? titleBlock + '\n' : '') + pre + body.slice(els[0].start)
+    for (const g of d.structure) {
+      for (const e of g.elements) {
+        const v = d.values[e.key]
+        if (v == null || v === e.text) continue
+        out += base.slice(cursor, e.start) + v
+        cursor = e.end
+      }
+    }
+    return out + base.slice(cursor)
   }
-  // Save the whole document as a new revision (snapshot = full Fountain source).
-  // `draft.baseRev` pins the expected active revision for optimistic concurrency
-  // — a stale base is rejected with STALE_REVISION.
-  async function doSaveDoc() {
+
+  async function doSaveDoc(overwrite) {
     if (!draft || !pid) return false
     setBusy(true); setNotice(null)
     try {
-      await api(`/projects/${pid}/snapshot`, {
+      let rev = draft.baseRev
+      if (overwrite) {
+        const p = await api(`/projects/${encodeURIComponent(pid)}`)
+        rev = p && p.active_revision_id
+      }
+      const res = await api(`/projects/${encodeURIComponent(pid)}/snapshot`, {
         method: 'POST',
-        body: { content: buildDocFromDraft(draft), revision_id: draft.baseRev }
+        body: { content: buildDocFromDraft(draft), revision_id: rev }
       })
+      if (res && res.id) activeRevIdRef.current = res.id
       setDraft(null)
-      setNotice({ kind: 'ok', text: 'Document saved as a new revision.' })
+      setEditing(false)
+      setNotice({ kind: 'ok', text: 'Saved. Undo is in the History tab.' })
       invalidateAll()
       return true
     } catch (e) {
       const info = errInfo(e)
       if (info.code === 'STALE_REVISION') {
         setNotice({ kind: 'err', text:
-          'Save conflict: the script changed while you were editing. Your text is kept — ' +
-          'reload below to see the latest, then re-apply your edit.',
-          action: () => { projectQ.refetch(); closeNotice() } })
+          'Save conflict: the script changed while you were editing (maybe from the chat). ' +
+          'Your text is still in the editor.',
+          actionLabel: 'Overwrite with my version',
+          action: () => { closeNotice(); doSaveDoc(true) } })
       } else {
         setNotice({ kind: 'err', text: `Save failed: ${info.text}` })
       }
@@ -919,8 +821,8 @@ function ScreenplayPane() {
       invalidateAll()
     } catch (e) {
       const info = errInfo(e)
-      if (info.code === 'ERR_STALE_REVISION' || info.code === 'STALE_REVISION') {
-        setNotice({ kind: 'err', text: 'This proposal is stale (its base revision or rules changed). Reject it to clear it.' })
+      if (info.code === 'STALE_REVISION') {
+        setNotice({ kind: 'err', text: `This proposal is out of date: ${info.text}` })
       } else {
         setNotice({ kind: 'err', text: `Accept failed: ${info.text}` })
       }
@@ -1024,12 +926,13 @@ function ScreenplayPane() {
         if (!isPdf) {
           try { preview = b64ToText(b64) } catch (_) { preview = '' }
         }
-        const titleM = preview.match(/^Title:\s*(.+)$/mi)
-        const creditM = preview.match(/(?:Written by|written by|story by)\s*:?\s*([^\r\n]+)/mi)
+        // Title/author are left blank so the backend takes them from the
+        // file's own title page (Fountain, Final Draft or PDF).
+        if (/\.fdx$/i.test(file.name)) preview = ''
         setImportPanel({
           name: file.name,
-          title: (titleM && titleM[1] || file.name.replace(/\.[^.]+$/, '')).trim(),
-          author: (creditM && creditM[1] || '').trim(),
+          title: '',
+          author: '',
           preview,
           content_b64: b64,
           isPdf
@@ -1046,7 +949,7 @@ function ScreenplayPane() {
     setBusy(true)
     try {
       const p = await api('/projects', { method: 'POST', body: {
-        title: (importPanel.title || '').trim() || 'Imported script',
+        title: (importPanel.title || '').trim(),
         author: (importPanel.author || '').trim(),
         filename: importPanel.name,
         content_b64: importPanel.content_b64
@@ -1055,10 +958,10 @@ function ScreenplayPane() {
       setSceneId(null)
       setDraft(null)
       setEditing(false)
-      setPid(p.id)
       setTab('script')
       setNotice({ kind: 'ok', text: `Imported "${p.title}" as a new project.` })
-      await invalidateAll()
+      await invalidateAll()  // refresh the list first, or the auto-select reverts it
+      setPid(p.id)
     } catch (e) {
       setNotice({ kind: 'err', text: `Import failed: ${errInfo(e).text}` })
     } finally {
@@ -1082,12 +985,42 @@ function ScreenplayPane() {
       setSceneId(null)
       setDraft(null)
       setEditing(false)
-      setPid(p.id)
       setTab('script')
       setNotice({ kind: 'ok', text: `Created "${p.title}".` })
-      await invalidateAll()
+      await invalidateAll()  // refresh the list first, or the auto-select reverts it
+      setPid(p.id)
     } catch (e) {
       setNotice({ kind: 'err', text: `Create failed: ${errInfo(e).text}` })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function doDeleteProject(id) {
+    setBusy(true)
+    try {
+      await api(`/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      setConfirmDelete(null)
+      setDraft(null); setEditing(false)
+      if (id === pid) setPid(null)
+      setNotice({ kind: 'ok', text: 'Project deleted.' })
+      invalidateAll()
+    } catch (e) {
+      setNotice({ kind: 'err', text: `Delete failed: ${errInfo(e).text}` })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function doExportFdx() {
+    if (!pid) return
+    setBusy(true)
+    try {
+      const r = await api(`/projects/${encodeURIComponent(pid)}/fdx`, { method: 'GET' })
+      downloadText(r.fdx, r.filename, 'application/xml')
+      setNotice({ kind: 'ok', text: `Exported ${r.filename} — opens in Final Draft and most screenwriting apps.` })
+    } catch (e) {
+      setNotice({ kind: 'err', text: `Final Draft export failed: ${errInfo(e).text}` })
     } finally {
       setBusy(false)
     }
@@ -1099,7 +1032,7 @@ function ScreenplayPane() {
     try {
       const r = await api(`/projects/${pid}/fountain`, { method: 'GET' })
       downloadText(r.fountain, r.filename)
-      setNotice({ kind: 'ok', text: `Exported ${r.filename} (${r.size_bytes} bytes) for use in other screenplay software.` })
+      setNotice({ kind: 'ok', text: `Exported ${r.filename} for use in other screenplay software.` })
     } catch (e) {
       setNotice({ kind: 'err', text: `Fountain export failed: ${errInfo(e).text}` })
     } finally {
@@ -1107,9 +1040,9 @@ function ScreenplayPane() {
     }
   }
 
-  function downloadText(text, filename) {
+  function downloadText(text, filename, mime) {
     try {
-      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+      const blob = new Blob([text], { type: (mime || 'text/plain') + ';charset=utf-8' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -1148,7 +1081,8 @@ function ScreenplayPane() {
         onChange: (newId) => requireSaved(() => setPid(newId), 'switching projects'),
         onNew: () => setNewProject({ title: '', author: '', format: 'screenplay', text: '' }),
         onImport: onImportFile,
-        importAccept: '.fountain,.fdx,.pdf,.txt,.xml,.text,.md,text/plain,application/pdf'
+        importAccept: '.fountain,.spmd,.fdx,.pdf,.txt,.text,.md,text/plain,application/pdf',
+        onDelete: (id) => requireSaved(() => setConfirmDelete(id), 'deleting the project')
       }),
       data && jsx('span', { className: 'hsp-format-chip', children: 'SCREENPLAY' })
     ] }),
@@ -1197,7 +1131,7 @@ function ScreenplayPane() {
     key: `${notice.kind}:${notice.text}`,
     children: [
       jsx('span', { children: notice.text }),
-      notice.action && jsx('button', { className: 'hsp-btn hsp-btn-small', onClick: notice.action, children: 'Reload latest' }),
+      notice.action && jsx('button', { className: 'hsp-btn hsp-btn-small', onClick: notice.action, children: notice.actionLabel || 'Retry' }),
       jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-ghost', onClick: closeNotice, children: '✕' })
     ]
   }) : null
@@ -1213,9 +1147,7 @@ function ScreenplayPane() {
             jsx('div', { children: `Project load failed: ${String((projectQ.error && projectQ.error.message) || projectQ.error)}` }),
             jsx('button', { className: 'hsp-btn', onClick: () => projectQ.refetch(), children: 'Retry' })
           ] })
-        : scenes.length === 0
-          ? jsx('div', { className: 'hsp-empty', children: 'This project has no scenes yet. Ask in chat to add or rewrite scenes.' })
-          : jsxs('div', { className: 'gw-workspace' + (outlineOpen ? '' : ' gw-outline-hidden'), children: [
+        : jsxs('div', { className: 'gw-workspace' + (outlineOpen ? '' : ' gw-outline-hidden'), children: [
               // Left: collapsible scene outline (click to jump; syncs with scroll)
               jsx('div', { className: 'gw-outline', children: [
                 jsxs('div', { className: 'gw-outline-head', children: [
@@ -1223,7 +1155,9 @@ function ScreenplayPane() {
                   jsx('span', { className: 'gw-outline-count', children: String(scenes.length) }),
                   jsx('button', { className: 'gw-iconbtn', title: 'Hide outline', onClick: () => setOutlineOpen(false), children: '⟨' })
                 ] }),
-                jsx('div', { className: 'gw-outline-list', ref: navRef, children: scenes.map(s =>
+                jsx('div', { className: 'gw-outline-list', ref: navRef, children: scenes.length === 0
+                  ? jsx('div', { className: 'hsp-hint', style: { padding: '8px 10px' }, children: 'No scenes yet.' })
+                  : scenes.map(s =>
                   jsx('button', {
                     className: `gw-outline-row${sceneId === s.id ? ' gw-outline-active' : ''}`,
                     'data-nav-id': s.id,
@@ -1239,11 +1173,13 @@ function ScreenplayPane() {
               // Center: the manuscript paper
               jsxs('div', { className: 'gw-stage', children: [
                 !outlineOpen && jsx('button', { className: 'gw-iconbtn gw-outline-show', title: 'Show outline', onClick: () => setOutlineOpen(true), children: '⟩' }),
-                scene ? jsxs('div', { className: 'gw-slate', children: [
+                jsxs('div', { className: 'gw-slate', children: [
                   jsx('div', { className: 'gw-slate-title', children:
-                    (scene.heading || '(untitled scene)') + (dirty ? '  ● unsaved' : '') }),
-                  !editing ? jsx('button', { className: 'hsp-btn hsp-btn-small', title: 'Edit the entire script in Fountain', onClick: startEdit, children: 'Edit document' }) : null
-                ] }) : null,
+                    (editing ? (draft && draft.mode === 'source' ? 'Editing Fountain source' : 'Editing') : (scene ? (scene.heading || '(untitled scene)') : (data && data.project ? data.project.title : '')))
+                    + (dirty ? '  ● unsaved' : '') }),
+                  !editing ? jsx('button', { className: 'hsp-btn hsp-btn-small', title: 'Edit the script on the page', onClick: () => startEdit('formatted'), children: 'Edit' }) : null,
+                  !editing ? jsx('button', { className: 'hsp-btn hsp-btn-small', title: 'Edit the raw Fountain text (add scenes, characters, anything)', onClick: () => startEdit('source'), children: 'Edit Fountain' }) : null
+                ] }),
                 // View settings: find (Ctrl/Cmd+F) + paper tone + size (persisted in localStorage).
                 jsxs('div', { className: 'hsp-viewbar', children: [
                   jsx('button', {
@@ -1308,42 +1244,51 @@ function ScreenplayPane() {
                 ] }) : null,
                 editing && draft
                   ? jsxs('div', { className: 'hsp-editor hsp-editor-doc', children: [
-                      jsx('div', { className: 'hsp-editor-scroll', children: [
-                        jsx(TitlePageEditor, {
-                          fields: draft.title.fields, order: draft.title.order,
-                          onChange: (key, val) => setDraft(d => ({ ...d, title: { ...d.title, fields: { ...d.title.fields, [key]: val } }, changed: true })),
-                        }),
-                        draft.structure.map((sc) => jsxs('div', { className: 'hsp-edit-scene', key: sc.id, children:
-                          sc.elements.map((e) => jsx(EditElement, {
-                            kind: e.kind, key: e.key,
-                            value: draft.values[e.key] != null ? draft.values[e.key] : e.text,
-                            onChange: (val) => setDraft(d => ({ ...d, values: { ...d.values, [e.key]: val }, changed: true })),
-                          })),
-                        })),
-                        jsx('div', { className: 'hsp-hint hsp-full-hint', children:
-                          'Editing the whole script — the standard format is preserved. Save to commit a new revision.' }),
-                      ] }),
+                      draft.mode === 'source'
+                        ? jsx('textarea', {
+                            className: 'hsp-textarea hsp-source', value: draft.source, spellCheck: true,
+                            onChange: (e) => { const v = e.target.value; setDraft(d => ({ ...d, source: v, changed: true })) },
+                          })
+                        : jsx('div', { className: 'hsp-editor-paper', children: jsxs('div', { className: 'hsp-page', children: [
+                            jsx(TitlePageEditor, {
+                              fields: draft.title,
+                              onChange: (key, val) => setDraft(d => ({ ...d, title: { ...d.title, [key]: val }, titleChanged: true, changed: true })),
+                            }),
+                            draft.structure.map((sc) => jsx('div', { className: 'hsp-edit-scene', key: sc.id, children:
+                              sc.elements.map((e) => jsx(EditElement, {
+                                kind: e.kind, key: e.key,
+                                value: draft.values[e.key] != null ? draft.values[e.key] : e.text,
+                                onChange: (val) => setDraft(d => ({ ...d, values: { ...d.values, [e.key]: val }, changed: true })),
+                              })),
+                            })),
+                            jsx('div', { className: 'hsp-hint hsp-full-hint', children:
+                              'Edit text in place. To add new scenes or speeches use Edit Fountain, or ask in chat.' }),
+                          ] }) }),
                       jsxs('div', { className: 'hsp-actions', children: [
-                        jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy, onClick: () => doSaveDoc(), children: busy ? 'Saving…' : 'Save document' }),
+                        jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy || !dirty, onClick: () => doSaveDoc(), children: busy ? 'Saving…' : 'Save' }),
                         jsx('button', {
                           className: 'hsp-btn', disabled: busy,
                           onClick: () => { setDraft(null); setEditing(false) },
-                          children: 'Cancel' }),
-                        dirty
-                          ? jsx('span', { className: 'hsp-hint', children: 'unsaved changes' })
-                          : null
+                          children: dirty ? 'Discard changes' : 'Close editor' }),
+                        dirty ? jsx('span', { className: 'hsp-hint', children: 'unsaved changes' }) : null
                       ] })
                     ] })
                   : jsxs('div', { className: 'hsp-full', ref: fullRef, onScroll: onFullScroll, children: [
-                      jsx(TitlePageView, { fields: titlePage.fields, order: titlePage.order }),
-                      scenes.map((s, i) => jsx(pack.Block, { scene: s, index: i, key: s.id })),
-                      jsx('div', { className: 'hsp-hint hsp-full-hint', children:
-                        'Scroll to read the whole script — the list highlights the scene at the top edge. Click a scene to jump; use Edit document to change it.' })
+                      jsxs('div', { className: 'hsp-page', children: [
+                        jsx(TitlePageView, { titlePage }),
+                        preamble.length ? jsx('div', { className: 'hsp-full-scene hsp-preamble', children:
+                          preamble.map((e, i) => jsx(El, { e, group: 'preamble', elIndex: i, key: i })) }) : null,
+                        scenes.map((s, i) => jsx(pack.Block, { scene: s, index: i, key: s.id })),
+                        scenes.length === 0 ? jsx('div', { className: 'hsp-hint hsp-full-hint', children:
+                          'No scenes yet. Describe your first scene in the chat (💬), or click Edit Fountain and start typing — e.g. INT. DINER - NIGHT.' }) : null,
+                      ] }),
                     ] }),
                 jsx('div', { className: 'gw-statusbar', children: [
-                  jsx('span', { children: wordCount.toLocaleString() + ' words' }),
+                  jsx('span', { children: (data && data.page_count ? data.page_count : 0) + ' page' + (data && data.page_count === 1 ? '' : 's') }),
                   jsx('span', { className: 'gw-statusbar-sep', children: '·' }),
-                  jsx('span', { children: scenes.length + ' scene' + (scenes.length === 1 ? '' : 's') })
+                  jsx('span', { children: scenes.length + ' scene' + (scenes.length === 1 ? '' : 's') }),
+                  jsx('span', { className: 'gw-statusbar-sep', children: '·' }),
+                  jsx('span', { children: wordCount.toLocaleString() + ' words' }),
                 ] })
               ] })
             ] })
@@ -1383,7 +1328,8 @@ function ScreenplayPane() {
         jsx('div', { className: 'gw-chat-col', style: { width: chatWidth + 'px' }, children:
           jsx(GwChatRail, {
             projects, currentPid: pid, currentData: data,
-            onClose: () => setChatOpen(false)
+            onClose: () => setChatOpen(false),
+            onTurnDone: invalidateAll
           })
         })
       ] })
@@ -1429,7 +1375,9 @@ function ScreenplayPane() {
           'Stale proposal: its base revision or rules no longer exist. Reject it to clear it.' }),
       !proposal.stale && !proposal.base_is_active &&
         jsx('div', { className: 'hsp-notice hsp-notice-err', children:
-          'Heads up: this proposal is based on an older revision. Accepting applies it to its base, not the current text.' }),
+          (proposal.conflict
+            ? 'This proposal can no longer be applied: ' + proposal.conflict + '. Reject it and ask for the change again.'
+            : 'The script changed since this proposal was made. Accepting re-applies it to the current text (only its own scenes change).') }),
       jsx('div', { className: 'hsp-changes', children: (proposal.changes || []).map(c =>
         jsxs('div', { className: 'hsp-change', key: c.scene_id || c.heading, children: [
           jsxs('div', { className: 'hsp-change-head', children: [
@@ -1488,12 +1436,12 @@ function ScreenplayPane() {
       : jsxs('div', { className: 'hsp-rules', children: [
           jsx('div', { className: 'hsp-list-label', children: `Rules version ${String(rulesForm.rulesId).slice(0, 12)}… — append-only: saving creates a new version` }),
           jsxs('div', { className: 'hsp-field', children: [
-            jsx('label', { className: 'hsp-label', children: 'Max lines per dialogue block (empty = keep current)' }),
+            jsx('label', { className: 'hsp-label', children: 'Max number of speeches in the whole script (empty = no limit)' }),
             jsx('input', { className: 'hsp-input', type: 'number', min: '1', value: rulesForm.dialogueBlockLimit,
               onChange: (e) => setRulesForm(f => ({ ...f, dialogueBlockLimit: e.target.value })) })
           ] }),
           jsxs('div', { className: 'hsp-field', children: [
-            jsx('label', { className: 'hsp-label', children: 'Max pages (empty = keep current)' }),
+            jsx('label', { className: 'hsp-label', children: 'Max pages (empty = no limit)' }),
             jsx('input', { className: 'hsp-input', type: 'number', min: '1', value: rulesForm.pageLimit,
               onChange: (e) => setRulesForm(f => ({ ...f, pageLimit: e.target.value })) })
           ] }),
@@ -1549,7 +1497,7 @@ function ScreenplayPane() {
   const hist = (historyQ.data && Array.isArray(historyQ.data)) ? historyQ.data : []
   const historyTab = !pid ? null : jsxs('div', { className: 'hsp-history', children: [
     jsxs('div', { className: 'hsp-actions', children: [
-      jsx('button', { className: 'hsp-btn', disabled: busy || confirmId === 'undo',
+      jsx('button', { className: 'hsp-btn', disabled: busy,
         onClick: () => (confirmId === 'undo' ? doUndo() : setConfirmId('undo')),
         children: confirmId === 'undo' ? 'Confirm undo last change' : 'Undo last change' })
     ] }),
@@ -1609,6 +1557,11 @@ function ScreenplayPane() {
         'Fountain (.fountain) — opens in Fountain, Final Draft, Highland, or any Fountain-compatible tool' }),
       jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy, onClick: () => doExportFountain(),
         children: busy ? 'Preparing…' : 'Export current revision as Fountain' })
+    ] }),
+    jsxs('div', { className: 'hsp-export-fountain', children: [
+      jsx('div', { className: 'hsp-list-label', children: 'Final Draft (.fdx) — opens in Final Draft, WriterDuet, Fade In, Highland' }),
+      jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy, onClick: () => doExportFdx(),
+        children: busy ? 'Preparing…' : 'Export current revision as Final Draft' })
     ] })
   ] })
 
@@ -1623,11 +1576,11 @@ function ScreenplayPane() {
     jsx('div', { className: 'hsp-hint', children: `File: ${importPanel.name} · ${importPanel.isPdf ? 'PDF (text will be extracted)' : 'text (Fountain / Final Draft / plain text)'}` }),
     jsxs('div', { className: 'hsp-import-field', children: [
       jsx('label', { children: 'Title' }),
-      jsx('input', { className: 'hsp-input', value: importPanel.title, onChange: (e) => setImportPanel({ ...importPanel, title: e.target.value }) })
+      jsx('input', { className: 'hsp-input', value: importPanel.title, placeholder: 'From the file’s title page', onChange: (e) => setImportPanel({ ...importPanel, title: e.target.value }) })
     ] }),
     jsxs('div', { className: 'hsp-import-field', children: [
       jsx('label', { children: 'Author' }),
-      jsx('input', { className: 'hsp-input', value: importPanel.author, onChange: (e) => setImportPanel({ ...importPanel, author: e.target.value }) })
+      jsx('input', { className: 'hsp-input', value: importPanel.author, placeholder: 'From the file’s title page', onChange: (e) => setImportPanel({ ...importPanel, author: e.target.value }) })
     ] }),
     (importPanel.isPdf)
       ? jsx('div', { className: 'hsp-hint', children: 'PDF detected — text will be extracted and re-structured into Fountain on import. Complex layouts may need a light cleanup in the Script tab afterward.' })
@@ -1700,6 +1653,17 @@ function ScreenplayPane() {
                 tab === 'history' ? historyTab : null,
                 tab === 'export' ? exportTab : null
               ] }),
+    confirmDelete && jsxs('div', { className: 'hsp-guard', children: [
+      jsxs('div', { className: 'hsp-guard-box', children: [
+        jsx('div', { className: 'hsp-guard-title', children: 'Delete project?' }),
+        jsx('div', { className: 'hsp-guard-text', children:
+          `“${((projects.find(p => p.id === confirmDelete) || {}).title) || confirmDelete}” and its whole revision history will be permanently deleted. Export it first if you want a copy.` }),
+        jsxs('div', { className: 'hsp-guard-actions', children: [
+          jsx('button', { className: 'hsp-btn hsp-btn-danger', disabled: busy, onClick: () => doDeleteProject(confirmDelete), children: busy ? 'Deleting…' : 'Delete permanently' }),
+          jsx('button', { className: 'hsp-btn hsp-btn-ghost', disabled: busy, onClick: () => setConfirmDelete(null), children: 'Cancel' })
+        ] })
+      ] })
+    ] }),
     guard && jsxs('div', { className: 'hsp-guard', children: [
       jsxs('div', { className: 'hsp-guard-box', children: [
         jsx('div', { className: 'hsp-guard-title', children: 'Unsaved changes' }),
@@ -1791,11 +1755,6 @@ const CSS = `
 .hsp-full-idx { opacity: 0.45; font-size: 11px; flex: none; }
 .hsp-full-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hsp-full-hint { padding: 10px 2px 4px; }
-.f-scene { font-weight: 700; margin-top: 4px; }
-.f-char { text-align: center; font-weight: 600; margin-top: 3px; }
-.f-paren { text-align: center; font-style: italic; padding: 0 26%; opacity: 0.9; }
-.f-dialogue { text-align: center; padding: 0 14%; }
-.f-trans { text-align: right; font-weight: 600; }
 .hsp-raw { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; margin: 0; opacity: 0.9; }
 .hsp-editor { display: flex; flex-direction: column; gap: 8px; }
 .hsp-textarea { width: 100%; box-sizing: border-box; min-height: 260px; resize: vertical; background: transparent; color: inherit; border: 1px solid color-mix(in oklab, currentColor 22%, transparent); border-radius: 8px; padding: 8px; font-family: 'Courier New', ui-monospace, monospace; font-size: 12.5px; line-height: 1.5; }
@@ -1855,7 +1814,7 @@ const CSS = `
 .hsp-dd-item:hover { background: color-mix(in oklab, currentColor 10%, transparent); }
 .hsp-dd-item-active { background: color-mix(in oklab, currentColor 18%, transparent); color: inherit; font-weight: 600; }
 /* ---- View settings: font + size + light "paper" theme ----
-   --gw-font / --gw-size are set inline on .hsp-pane (see effectiveFont/SIZES).
+   --gw-font / --gw-size are set inline on .hsp-pane (see the pane style).
    The reading surface (paper) switches between the host's dark surface and a
    warm-white light theme; the chrome (header, tabs, scene head) keeps the
    host theme. All of this is plain CSS — no dependencies. */
@@ -1983,11 +1942,6 @@ const CSS = `
 .hsp-full-hint { font-family: var(--gw-ui, ui-monospace, monospace); font-size: 11px; opacity: 0.55; text-align: center; padding: 18px 0 6px; }
 
 /* --- Fountain (screenplay) typography on the paper --- */
-.f-scene { font-weight: 700; margin-top: 2px; }
-.f-char { text-align: center; font-weight: 600; margin-top: 10px; }
-.f-paren { text-align: center; font-style: italic; padding: 0 22%; opacity: 0.82; }
-.f-dialogue { text-align: center; padding: 0 12%; }
-.f-trans { text-align: right; font-weight: 600; margin-top: 10px; }
 .hsp-raw { font-family: var(--gw-font, 'Courier Prime', monospace); color: #1b1e28; }
 
 /* --- editor (write on the page) --- */
@@ -2068,6 +2022,47 @@ button:focus-visible, .hsp-input:focus, .hsp-select:focus, .hsp-textarea:focus, 
 .hsp-titlepage-extra { display: flex; align-items: center; justify-content: center; gap: 8px; max-width: 440px; margin: 0 auto 9px; }
 .hsp-titlepage-extra-key { font-family: 'Courier New', ui-monospace, monospace; font-size: 1em; color: color-mix(in oklab, var(--gw-ink) 70%, transparent); white-space: nowrap; }
 .hsp-titlepage-extra .hsp-titlepage-input { margin: 0; width: 100%; max-width: none; text-align: left; }
+/* ================= Screenplay page geometry =================
+   Columns follow the printed page (Courier, 10 characters per inch): the text
+   column is 60ch wide (1.5" left / 1" right margin on an 85ch page); dialogue
+   sits 10ch in and is 35ch wide, parentheticals 16ch in, cues 22ch in, and
+   transitions are flush right. Percentages keep the proportions on a narrow pane. */
+.hsp-page { font-family: var(--gw-font, 'Courier Prime', monospace); font-size: var(--gw-size, 13px); line-height: 1.25; color: var(--gw-ink, #1b1e28); }
+.hsp-full { max-width: calc(85ch + 2px); font-family: var(--gw-font, 'Courier Prime', monospace); font-size: var(--gw-size, 13px); padding: 2.5em 0; }
+.hsp-page { padding: 0 11.8% 0 17.6%; box-sizing: border-box; }
+.hsp-full-scene, .hsp-edit-scene { position: relative; display: block; padding: 0; border: none; gap: 0; font-family: inherit; font-size: inherit; line-height: inherit; }
+.hsp-full-scene + .hsp-full-scene, .hsp-edit-scene + .hsp-edit-scene { margin-top: 2.5em; }
+.hsp-preamble { margin-bottom: 2.5em; }
+.hsp-scene-num { position: absolute; left: -5ch; top: 0; opacity: 0.45; font-size: 0.9em; }
+.f-scene, .f-action, .f-char, .f-trans, .f-centered, .f-lyric, .f-section, .f-synopsis, .f-note, .f-boneyard { margin-top: 1.25em; white-space: pre-wrap; }
+.f-paren, .f-dialogue { margin-top: 0; white-space: pre-wrap; }
+.hsp-full-scene > .f-scene, .hsp-preamble > :first-child, .hsp-edit-scene > :first-child { margin-top: 0; }
+.f-scene { font-weight: 700; }
+.f-char { margin-left: 36.67%; text-align: left; }
+.f-paren { margin-left: 26.67%; width: 41.67%; text-align: left; }
+.f-dialogue { margin-left: 16.67%; width: 58.33%; text-align: left; }
+.f-trans { text-align: right; }
+.f-centered { text-align: center; }
+.f-lyric { font-style: italic; }
+.f-section, .f-synopsis, .f-note, .f-boneyard { font-family: var(--gw-ui, inherit); font-size: 0.85em; opacity: 0.55; }
+.f-section { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.f-synopsis, .f-note { font-style: italic; }
+.f-boneyard { text-decoration: line-through; }
+.f-pagebreak { margin: 1.25em 0 0; border-top: 1px dashed color-mix(in oklab, var(--gw-ink, #1b1e28) 35%, transparent); }
+textarea.hsp-edit-el { width: 100%; }
+textarea.hsp-edit-el.f-char { width: 63.33%; }
+textarea.hsp-edit-el.f-dialogue { width: 58.33%; }
+textarea.hsp-edit-el.f-paren { width: 41.67%; }
+.f-trans-left { text-align: left; }
+.hsp-source { flex: 1; min-height: 360px; width: 100%; max-width: calc(85ch + 2px); align-self: center; font-family: var(--gw-font, 'Courier Prime', monospace); font-size: var(--gw-size, 13px); line-height: 1.4; padding: 1.25em 2em; white-space: pre-wrap; }
+.hsp-editor-paper { flex: 1; min-height: 0; overflow-y: auto; width: 100%; max-width: calc(85ch + 2px); align-self: center; background: var(--gw-paper, #dbe3f4); border-radius: 3px; padding: 2.5em 0; box-sizing: border-box; box-shadow: 0 2px 16px rgba(0,0,0,0.22); }
+.hsp-titlepage-title { font-size: 1em; font-weight: 700; letter-spacing: 0; text-transform: none; }
+.hsp-titlepage-line { font-size: 1em; margin-top: 1.25em; }
+.hsp-titlepage-credit { margin-top: 3.75em; }
+.hsp-titlepage-corners { display: flex; justify-content: space-between; align-items: flex-end; gap: 2ch; text-align: left; padding-bottom: 1em; }
+.hsp-titlepage-right { text-align: right; }
+.hsp-full .hsp-titlepage { min-height: 52em; margin-bottom: 3.75em; box-shadow: none; border-bottom: 1px dashed color-mix(in oklab, var(--gw-ink, #1b1e28) 30%, transparent); padding-bottom: 1.25em; }
+.hsp-dd-item-danger { color: #e5534b; }
 `
 
 // ---------- Ghostwriter chat (project-scoped, multi-tab, resizable) ----------
@@ -2108,7 +2103,7 @@ function projectContextBlock(project) {
   const lines = scenes.map((s, i) =>
     '  ' + (i + 1) + '. ' + (s.heading || '(untitled)') + ' [scene id: ' + (s.id || '') + ']')
   return [
-    '[Ghostwriter context — you are working on the screenplay project below. Use the ghost_* tools with this project_id and stay on this project.]',
+    '[Ghostwriter context — the writer is working on the screenplay project below in the Ghostwriter workspace. Use the ghost_* tools (see the ghostwriter:screenplay skill) with this project_id and stay on this project.]',
     'Project id: ' + (project.id || ''),
     'Project title: ' + (project.title || ''),
     'Current scenes (' + scenes.length + '):',
@@ -2165,7 +2160,7 @@ function saveChatWidth(w) {
   try { if (typeof localStorage !== 'undefined') localStorage.setItem(CHAT_WIDTH_KEY, String(w)) } catch (_) {}
 }
 
-function GwChat({ project, sessionTitle }) {
+function GwChat({ project, sessionTitle, onTurnDone }) {
   const [sid, setSid] = useState(null)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -2177,6 +2172,8 @@ function GwChat({ project, sessionTitle }) {
   const listRef = useRef(null)
   const streamRef = useRef('')
   const turnActive = useRef(false)
+  const turnDoneRef = useRef(onTurnDone)
+  turnDoneRef.current = onTurnDone
 
   useEffect(() => {
     let alive = true
@@ -2224,6 +2221,9 @@ function GwChat({ project, sessionTitle }) {
       streamRef.current = ''
       setStreamText(''); setStreaming(false); setWaiting(false); setBusy(false)
       if (finalText.trim()) setMessages((m) => [...m, { role: 'assistant', text: finalText }])
+      // The agent may have edited the script: refresh the workspace now
+      // instead of waiting for the next poll.
+      if (turnDoneRef.current) turnDoneRef.current()
       if (p.error) setError(String(p.error))
       else if (p.status === 'interrupted') setError('Reply was interrupted.')
     }
@@ -2278,7 +2278,7 @@ function GwChat({ project, sessionTitle }) {
   ] })
 }
 
-function GwChatRail({ projects, currentPid, currentData, onClose }) {
+function GwChatRail({ projects, currentPid, currentData, onClose, onTurnDone }) {
   const [tabs, setTabs] = useState(() => loadChatTabs(projects, currentPid))
   const [activeKey, setActiveKey] = useState(() => {
     const t = loadChatTabs(projects, currentPid)
@@ -2428,7 +2428,7 @@ function GwChatRail({ projects, currentPid, currentData, onClose }) {
       return jsx('div', {
         key: t.id,
         style: { display: (t.id === activeKey) ? 'flex' : 'none', flexDirection: 'column', flex: '1 1 0%', minHeight: 0 },
-        children: jsx(GwChat, { project: pd, sessionTitle: sessionTitleForTab(t) })
+        children: jsx(GwChat, { project: pd, sessionTitle: sessionTitleForTab(t), onTurnDone })
       })
     }),
     !tabs.length ? jsx('div', { className: 'gw-chat-empty', style: { padding: 16 }, children: 'No project selected.' }) : null,
@@ -2438,7 +2438,7 @@ function GwChatRail({ projects, currentPid, currentData, onClose }) {
 export default {
   id: ID,
   name: 'Ghostwriter',
-  description: 'Ghostwriter: a local writing workspace for screenplays — parse, revise, propose, validate, and export PDF.',
+  description: 'Ghostwriter: write screenplays with your model — formatted pages, revisions with undo, Fountain / Final Draft / PDF export.',
   defaultEnabled: true,
   register(ctx) {
     const style = document.createElement('style')
