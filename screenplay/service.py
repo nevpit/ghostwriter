@@ -35,7 +35,7 @@ def _next_id(ids: List[str], prefix: str = "scene") -> str:
 
 
 def _safe_filename(title: str, default: str = "script") -> str:
-    safe = "".join(c if (c.isalnum() or c in " -_.") else "_" for c in (title or "")).strip(" .")
+    safe = "".join(c if (c.isalnum() or c in " -_.()'&,!") else "_" for c in (title or "")).strip(" .")
     return safe or default
 
 

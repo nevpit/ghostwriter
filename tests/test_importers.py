@@ -9,7 +9,6 @@ import _bootstrap as B
 from pathlib import Path
 
 from screenplay import importers
-from screenplay import rendering
 
 FIXTURES = Path(B.__file__).resolve().parent / "fixtures"
 SAMPLE_FDX = (FIXTURES / "sample.fdx").read_text(encoding="utf-8")

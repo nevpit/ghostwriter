@@ -5,6 +5,7 @@ Operation dicts: ``{"type": "insert", "heading", "content", "before_scene_id"?}`
 and ``{"type": "replace", "scene_id", "heading", "content"}``.
 """
 import _bootstrap as B
+from pathlib import Path
 from screenplay.models import ServiceError
 
 
@@ -380,3 +381,127 @@ def test_import_file_pdf_roundtrip():
     assert any("OLD HOUSE" in h for h in headings), headings
     assert len(rev.scenes) >= 2
 
+
+
+# --- concurrency: proposals made on an older revision -----------------------
+
+def _two_scene_project():
+    B.fresh_home()
+    s = B.svc()
+    p = s.import_project("T", "A", B.SAMPLE_FOUNTAIN)
+    return s, p, s.read_revision(p.id).scenes
+
+
+def test_stale_proposal_is_replayed_when_its_scene_is_untouched():
+    s, p, scenes = _two_scene_project()
+    prop = s.propose(p.id, [{"type": "replace", "scene_id": scenes[1].id,
+                             "heading": "EXT. OLD HOUSE - DAWN", "content": "Morning."}])
+    # Meanwhile the writer edits the OTHER scene.
+    s.save_scene(p.id, scenes[0].id, "INT. OLD HOUSE - NIGHT", "Edited by hand.")
+    rev = s.accept_proposal(prop.id)
+    assert "Edited by hand." in rev.snapshot, "newer edit must survive"
+    assert "EXT. OLD HOUSE - DAWN" in rev.snapshot
+    assert [x.id for x in rev.scenes] == [x.id for x in scenes]
+
+
+def test_stale_proposal_on_edited_scene_is_refused_not_clobbered():
+    s, p, scenes = _two_scene_project()
+    prop = s.propose(p.id, [{"type": "replace", "scene_id": scenes[0].id,
+                             "heading": "INT. OLD HOUSE - NIGHT", "content": "Model version."}])
+    s.save_scene(p.id, scenes[0].id, "INT. OLD HOUSE - NIGHT", "Writer version.")
+    try:
+        s.accept_proposal(prop.id)
+        assert False, "expected STALE_REVISION"
+    except ServiceError as e:
+        assert e.code == "STALE_REVISION"
+    assert "Writer version." in s.read_revision(p.id).snapshot
+    assert s.get_proposal(prop.id).status == "stale"
+
+
+def test_check_does_not_resurrect_accepted_proposal():
+    s, p, scenes = _two_scene_project()
+    prop = s.propose(p.id, [{"type": "replace", "scene_id": scenes[0].id,
+                             "heading": "INT. OLD HOUSE - NIGHT", "content": "X."}])
+    s.accept_proposal(prop.id)
+    assert s.check_proposal(prop.id).status == "accepted"
+
+
+def test_stale_manual_save_rejected():
+    s, p, scenes = _two_scene_project()
+    old = p.active_revision_id
+    s.save_snapshot(p.id, B.SAMPLE_FOUNTAIN + "\nMore.\n", old)
+    try:
+        s.save_snapshot(p.id, "clobber", old)
+        assert False
+    except ServiceError as e:
+        assert e.code == "STALE_REVISION"
+
+
+def test_identical_save_creates_no_revision():
+    s, p, _ = _two_scene_project()
+    n = len(s.history(p.id))
+    s.save_snapshot(p.id, B.SAMPLE_FOUNTAIN)
+    assert len(s.history(p.id)) == n
+
+
+def test_replace_with_two_scenes_mints_new_id():
+    s, p, scenes = _two_scene_project()
+    prop = s.propose(p.id, [{"type": "replace", "scene_id": scenes[0].id,
+                             "heading": "INT. OLD HOUSE - NIGHT",
+                             "content": "First.\n\nINT. ATTIC - NIGHT\n\nSecond."}])
+    assert prop.status == "pending", prop.checks
+    rev = s.accept_proposal(prop.id)
+    ids = [x.id for x in rev.scenes]
+    assert len(ids) == 3 and ids[0] == scenes[0].id and ids[2] == scenes[1].id
+    assert ids[1] not in (scenes[0].id, scenes[1].id)
+
+
+# --- rules / title page / project lifecycle ---------------------------------
+
+def test_rules_protected_range_without_hash_from_desktop():
+    s, p, scenes = _two_scene_project()
+    rv = s.update_rules(p.id, protected=[{"scene_id": scenes[0].id, "offset_in_scene": 0,
+                                          "length": 10, "label": "slug"}])
+    assert rv.protected[0].text_hash
+    prop = s.propose(p.id, [{"type": "replace", "scene_id": scenes[0].id,
+                             "heading": "INT. NEW PLACE - DAY", "content": "x"}])
+    assert prop.status == "blocked"
+
+
+def test_rules_reject_bad_numbers():
+    s, p, _ = _two_scene_project()
+    for bad in ("abc", 0):
+        try:
+            s.update_rules(p.id, page_limit=bad)
+            assert False
+        except ServiceError as e:
+            assert e.code == "VALIDATION"
+    assert s.update_rules(p.id, page_limit=None).page_limit is None
+
+
+def test_title_page_updates_project_header():
+    s, p, _ = _two_scene_project()
+    s.set_title_page(p.id, {"Title": "**Renamed**", "Credit": "Written by", "Author": "Kim"})
+    q = s.get_project(p.id)
+    assert (q.title, q.author) == ("Renamed", "Kim")
+
+
+def test_create_project_writes_title_page_and_delete_removes_everything():
+    B.fresh_home()
+    s = B.svc()
+    p = s.create_project("Blank Page", "Ann")
+    assert s.read_revision(p.id).snapshot.startswith("Title: Blank Page\nCredit: Written by\nAuthor: Ann")
+    s.export_pdf(p.id)
+    s.delete_project(p.id)
+    assert s.list_projects() == []
+    assert not any(Path(s.exports_dir).glob("*.pdf"))
+
+
+def test_fdx_export_roundtrip():
+    from screenplay import importers
+    s, p, _ = _two_scene_project()
+    xml = s.export_fdx(p.id)["fdx"]
+    assert '<Paragraph Type="Character">' in xml
+    back = importers.fdx_to_fountain(xml)
+    scenes, problems = __import__("screenplay.fountain", fromlist=["x"]).parse(back)
+    assert len(scenes) == 2 and not problems

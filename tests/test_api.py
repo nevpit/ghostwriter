@@ -156,3 +156,44 @@ def test_fountain_export_route():
     assert d["filename"].endswith(".fountain")
     assert d["size_bytes"] == len(B.SAMPLE_FOUNTAIN.encode("utf-8"))
     assert d["revision_id"]
+
+
+def test_create_title_page_fdx_conflict_and_delete():
+    B.fresh_home()
+    c = _client()
+    p = c.post("/projects", json={"title": "Pilot", "author": "Sam"}).json()
+    d = c.get(f"/projects/{p['id']}").json()
+    assert [f["key"] for f in d["title_page"]["fields"]] == ["Title", "Credit", "Author"]
+    assert d["page_count"] == 1 and d["preamble"] == []
+
+    r = c.put(f"/projects/{p['id']}/title-page",
+              json={"fields": {"Title": "Pilot (v2)", "Author": "Sam"}})
+    assert r.status_code == 200
+    assert c.get(f"/projects/{p['id']}").json()["project"]["title"] == "Pilot (v2)"
+
+    old = d["active_revision_id"]
+    r = c.post(f"/projects/{p['id']}/snapshot", json={"content": "x", "revision_id": old})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "STALE_REVISION"
+
+    fdx = c.get(f"/projects/{p['id']}/fdx").json()
+    assert fdx["filename"] == "Pilot (v2).fdx" and "<FinalDraft" in fdx["fdx"]
+
+    assert c.delete(f"/projects/{p['id']}").status_code == 200
+    assert c.get(f"/projects/{p['id']}").status_code == 404
+
+
+def test_rules_from_desktop_shape():
+    pid = _seed()
+    c = _client()
+    sid = c.get(f"/projects/{pid}").json()["active_revision"]["scenes"][0]["id"]
+    r = c.put(f"/projects/{pid}/rules", json={
+        "dialogue_block_limit": None, "page_limit": 20, "guidance": ["Keep it tense"],
+        "protected": [{"scene_id": sid, "offset_in_scene": 0, "length": 5, "label": "x"}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["protected"][0]["text_hash"]
+
+
+def test_bad_base64_import_is_400():
+    B.fresh_home()
+    r = _client().post("/projects", json={"filename": "a.fdx", "content_b64": "!!!"})
+    assert r.status_code == 400

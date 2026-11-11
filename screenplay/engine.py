@@ -25,11 +25,10 @@ touching the service core.
 from __future__ import annotations
 
 import abc
-from typing import List, Optional
+from typing import List
 
 
-#: The format a new project defaults to. Phase 0 this is the only registered
-#: format; the first non-screenplay engine (Phase 1) will add to the registry.
+#: The format a new project defaults to (the only registered format in the MVP).
 DEFAULT_FORMAT = "screenplay"
 
 

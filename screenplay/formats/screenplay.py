@@ -18,7 +18,6 @@ from typing import List
 
 from .. import fountain
 from .. import importers
-from .. import models as M
 from .. import rendering
 from .. import validation
 from ..engine import DocumentEngine

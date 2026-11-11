@@ -1,15 +1,5 @@
-"""Screenplay service package.
+"""Ghostwriter screenplay backend.
 
-Pure-Python, stdlib-only. No third-party runtime dependencies so the plugin loads
-in the Hermes runtime venv (which has no pip) and stays installable in a fresh
-profile with zero friction.
+Pure-Python, stdlib-only, so the plugin loads in the Hermes runtime venv with
+no installs.
 """
-
-__all__ = [
-    "models",
-    "repository",
-    "fountain",
-    "validation",
-    "service",
-    "rendering",
-]
