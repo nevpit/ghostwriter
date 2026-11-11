@@ -42,6 +42,7 @@ ORIGIN_IMPORT = "import"
 ORIGIN_MANUAL_SAVE = "manual_save"
 ORIGIN_PROPOSAL = "proposal"
 ORIGIN_RESTORE = "restore"
+ORIGIN_ASSISTANT = "assistant"   # a direct edit made by the agent tools
 
 # ExportStatus
 EXPORT_OK = "ok"

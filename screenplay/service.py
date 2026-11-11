@@ -295,7 +295,8 @@ class ScreenplayService:
         return self._commit(p, snapshot, M.ORIGIN_MANUAL_SAVE, rev.id, active, scenes)
 
     def save_snapshot(self, project_id: str, fountain_text: str,
-                      revision_id: Optional[str] = None) -> M.Revision:
+                      revision_id: Optional[str] = None,
+                      origin: str = M.ORIGIN_MANUAL_SAVE) -> M.Revision:
         """Store a full-text save as a new active revision. Saving text that is
         identical to the active revision is a no-op (no history noise)."""
         p = self.get_project(project_id)
@@ -304,7 +305,7 @@ class ScreenplayService:
         if fountain_text == base.snapshot:
             return base
         scenes = self._carry_ids(base, fountain_text)
-        return self._commit(p, fountain_text, M.ORIGIN_MANUAL_SAVE, base.id, active, scenes)
+        return self._commit(p, fountain_text, origin, base.id, active, scenes)
 
     def _carry_ids(self, base: M.Revision, new_text: str) -> List[M.Scene]:
         """Parse ``new_text`` and keep scene ids stable when the scene list is
@@ -327,14 +328,15 @@ class ScreenplayService:
                 used.append(sc.id)
         return scenes
 
-    def set_title_page(self, project_id: str, fields, revision_id: Optional[str] = None) -> M.Revision:
+    def set_title_page(self, project_id: str, fields, revision_id: Optional[str] = None,
+                       origin: str = M.ORIGIN_MANUAL_SAVE) -> M.Revision:
         """Replace the title page (``{key: value}``; empty values drop a key)."""
         p = self.get_project(project_id)
         active = self._check_expected(p, revision_id)
         base = self.read_revision(project_id, active)
         if not isinstance(fields, (dict, list)):
             raise M.ServiceError(M.ERR_VALIDATION, "fields must be an object of title-page keys")
-        return self.save_snapshot(project_id, fountain.set_title_page(base.snapshot, fields), active)
+        return self.save_snapshot(project_id, fountain.set_title_page(base.snapshot, fields), active, origin)
 
     # ---------------- structure-aware find & replace ----------------
 
@@ -362,7 +364,8 @@ class ScreenplayService:
             i = j + len(q_low)
 
     def find_replace(self, project_id: str, query: str, replacement: str,
-                     target="all", revision_id: Optional[str] = None) -> dict:
+                     target="all", revision_id: Optional[str] = None,
+                     origin: str = M.ORIGIN_MANUAL_SAVE) -> dict:
         """Replace occurrences of ``query`` (case-insensitive) while preserving
         Fountain structure.
 
@@ -417,7 +420,7 @@ class ScreenplayService:
         new_snapshot = snapshot
         for s, e, new in sorted(edits, reverse=True):
             new_snapshot = new_snapshot[:s] + new + new_snapshot[e:]
-        rev = self.save_snapshot(project_id, new_snapshot, active)
+        rev = self.save_snapshot(project_id, new_snapshot, active, origin)
         return {"revision_id": rev.id, "replaced": len(edits), "count": total}
 
     def history(self, project_id: str) -> List[dict]:

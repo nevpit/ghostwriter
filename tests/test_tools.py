@@ -159,3 +159,11 @@ def test_restore_and_undo_tools():
     assert call("ghost_history", project_id=pid)["total"] == 3
     und = call("ghost_undo", project_id=pid)
     assert und["success"]
+
+
+def test_assistant_edits_are_attributed_in_history():
+    pid = _new()
+    call("ghost_find_replace", project_id=pid, query="Arthur", replacement="Walter")
+    call("ghost_set_title_page", project_id=pid, fields={"Title": "X"})
+    origins = [r["origin"] for r in call("ghost_history", project_id=pid)["revisions"]]
+    assert origins[:2] == ["assistant", "assistant"], origins
