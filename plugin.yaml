@@ -16,3 +16,4 @@ provides_tools:
   - ghost_export_pdf
   - ghost_restore
   - ghost_undo
+  - ghost_find_replace

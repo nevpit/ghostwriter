@@ -1,21 +1,52 @@
-"""Hermes screenplay plugin — agent-side registration.
-
-``register(ctx)`` exposes the screenplay service to the Hermes agent as tools
-in the ``screenplay`` toolset. The heavy lifting lives in the ``screenplay``
-service package; this module only wires tool handlers to service calls.
-
-The same process-wide service instance (``screenplay.runtime.get_service``) is
-also exposed to the desktop workspace through the dashboard FastAPI router
-(``dashboard/plugin_api.py``) and the Desktop SDK pane (``desktop/plugin.js``),
-so agent tools and the workspace always see the same state.
-"""
 from __future__ import annotations
+
+from pathlib import Path
 
 from .screenplay.tools import TOOLS
 
 
+def _skill_frontmatter(skill_md: Path) -> tuple:
+    """Return ``(frontmatter_dict, description)`` for a bundled ``SKILL.md``.
+
+    Uses Hermes' canonical frontmatter parser when importable, with a
+    lightweight manual fallback so the plugin still loads if the helper is
+    unavailable at register time.
+    """
+    try:
+        from agent.skill_utils import parse_frontmatter
+    except Exception:
+        parse_frontmatter = None
+    try:
+        raw = skill_md.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return {}, ""
+    if parse_frontmatter is not None:
+        try:
+            fm, _body = parse_frontmatter(raw)
+            if isinstance(fm, dict):
+                return fm, str(fm.get("description", ""))
+        except Exception:
+            pass
+    # Fallback: manual key: value parse of the first frontmatter block.
+    lines = raw.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}, ""
+    fm = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if ":" not in line:
+            continue
+        key, _sep, value = line.partition(":")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in (chr(34), chr(39)):
+            value = value[1:-1]
+        fm[key.strip()] = value
+    return fm, str(fm.get("description", ""))
+
+
 def register(ctx) -> None:
-    """Register the screenplay tools with the Hermes plugin context."""
+    """Register the ghostwriter tools and bundled per-format skills."""
     for name, schema, handler, emoji in TOOLS:
         ctx.register_tool(
             name=name,
@@ -24,3 +55,19 @@ def register(ctx) -> None:
             handler=handler,
             emoji=emoji,
         )
+
+    # Bundled, versioned, per-format skills. Each skills/<doctype>/SKILL.md is
+    # served read-only as ghostwriter:<doctype> (not copied into the user skills
+    # dir, so it updates with the plugin; a customized copy is a separate skill).
+    skill_dir = Path(__file__).resolve().parent / "skills"
+    register_skill = getattr(ctx, "register_skill", None)
+    if skill_dir.is_dir() and register_skill is not None:
+        for doctype in sorted(p.name for p in skill_dir.iterdir() if (p / "SKILL.md").is_file()):
+            skill_md = skill_dir / doctype / "SKILL.md"
+            frontmatter, description = _skill_frontmatter(skill_md)
+            register_skill(
+                doctype,
+                skill_md,
+                description=description or f"How to use the ghostwriter {doctype} tools.",
+                frontmatter=frontmatter or None,
+            )

@@ -204,12 +204,146 @@ class ScreenplayService:
 
     def save_snapshot(self, project_id: str, fountain_text: str,
                       revision_id: Optional[str] = None) -> M.Revision:
-        """Store a full manual save as a new revision (fresh scene mapping)."""
-        base = self.read_revision(project_id, revision_id or self._active_rev(project_id))
+        """Store a full manual save as a new revision (fresh scene mapping).
+
+        ``revision_id`` pins the writer's expected active revision (optimistic
+        concurrency): a stale base is rejected with STALE_REVISION so an
+        editor working on an old revision cannot clobber newer text."""
+        active = self._active_rev(project_id)
+        if revision_id is not None and revision_id != active:
+            raise M.ServiceError(
+                M.ERR_STALE_REVISION,
+                f"revision {revision_id[:8]}... is no longer active "
+                f"(active: {active[:8]}...)",
+            )
+        base = self.read_revision(project_id, revision_id or active)
         new_rev = self._make_revision(project_id, fountain_text, M.ORIGIN_MANUAL_SAVE, base.id)
         self.repo.touch_project(project_id, active_revision_id=new_rev.id,
                                 updated_at=M._now_iso())
         return new_rev
+
+    # ---------------- structure-aware find & replace ----------------
+
+    @staticmethod
+    def _case_preserve(orig: str, repl: str) -> str:
+        """Apply the case pattern of ``orig`` onto ``repl`` so a rename keeps
+        the surrounding convention: all-caps stays all-caps, all-lower stays
+        all-lower, title-case stays title-case. Falls back to ``repl`` unchanged
+        for any other pattern."""
+        if not orig or not repl:
+            return repl
+        if orig.isupper():
+            return repl.upper()
+        if orig.islower():
+            return repl.lower()
+        if orig[0].isupper() and (len(orig) == 1 or orig[1:].islower()):
+            return repl[0].upper() + repl[1:].lower()
+        return repl
+
+    def find_replace(self, project_id: str, query: str, replacement: str,
+                     target, revision_id: Optional[str] = None) -> dict:
+        """Replace occurrences of ``query`` (case-insensitive) with
+        ``replacement`` while preserving Fountain element structure.
+
+        Matches are walked in document order (scene by scene, element by
+        element) exactly as the client's search computes them, so a ``target``
+        of a 0-based global match index lines up with the client's highlighted
+        hit. For a ``character`` cue whose name matches, the replacement is
+        uppercased so the all-caps cue survives re-parse -- a lowercase name in
+        the character column would be re-read as ``action`` and collapse the
+        following dialogue block. Only the matched lines are spliced back at
+        their exact offsets; every other byte of the snapshot is untouched.
+        """
+        q = (query or "").strip()
+        if not q:
+            raise M.ServiceError(M.ERR_VALIDATION,
+                                 "query must be a non-empty string",
+                                 {"field": "query"})
+        if not isinstance(replacement, str):
+            replacement = ""
+        active = self._active_rev(project_id)
+        if revision_id is not None and revision_id != active:
+            raise M.ServiceError(
+                M.ERR_STALE_REVISION,
+                f"revision {revision_id[:8]}... is no longer active "
+                f"(active: {active[:8]}...)",
+            )
+        base = self.read_revision(project_id, revision_id or active)
+        snapshot = base.snapshot
+        scenes, _problems = fountain.parse(snapshot)
+        qlen = len(q)
+        q_low = q.lower()
+
+        def occurrences(t):
+            low = t.lower()
+            i = 0
+            out = []
+            while True:
+                j = low.find(q_low, i)
+                if j == -1:
+                    break
+                out.append((j, j + qlen))
+                i = j + qlen
+            return out
+
+        match_list = []
+        for scene in scenes:
+            for el in scene.elements:
+                etext = el.get("text") or ""
+                if not etext:
+                    continue
+                for rank in range(len(occurrences(etext))):
+                    match_list.append((el, rank))
+        total = len(match_list)
+
+        if isinstance(target, (int, float)) and not isinstance(target, bool):
+            idx = int(target)
+            if idx < 0 or idx >= total:
+                raise M.ServiceError(M.ERR_VALIDATION,
+                                     "match index out of range",
+                                     {"target": idx, "count": total})
+            selected = [match_list[idx]]
+        else:
+            if target not in (None, "all"):
+                raise M.ServiceError(M.ERR_VALIDATION,
+                                     "target must be 'all' or a match index",
+                                     {"target": target})
+            selected = match_list
+
+        if not selected:
+            raise M.ServiceError(M.ERR_VALIDATION, "no matches found",
+                                 {"count": 0})
+
+        edits = []
+        for (el, rank) in selected:
+            span_start = el.get("start")
+            span_end = el.get("end")
+            if span_start is None or span_end is None:
+                continue
+            raw = snapshot[span_start:span_end]
+            occs = occurrences(raw)
+            if rank >= len(occs):
+                continue
+            rs, re_ = occs[rank]
+            speaker = el.get("speaker")
+            if speaker and (q_low in speaker.lower()):
+                # Character cue: always keep the all-caps convention so the
+                # cue survives re-parse and the dialogue block is not collapsed.
+                new = replacement.upper()
+            else:
+                new = self._case_preserve(raw[rs:re_], replacement)
+            edits.append((span_start + rs, span_start + re_, new))
+
+        if not edits:
+            raise M.ServiceError(M.ERR_VALIDATION, "no replacement made",
+                                 {"count": total})
+
+        new_snapshot = snapshot
+        for (s, e, new) in sorted(edits, key=lambda x: x[0], reverse=True):
+            new_snapshot = new_snapshot[:s] + new + new_snapshot[e:]
+
+        rev = self.save_snapshot(project_id, new_snapshot, revision_id)
+        return {"revision_id": rev.id, "replaced": len(edits), "count": total}
 
     def history(self, project_id: str) -> List[dict]:
         self.get_project(project_id)

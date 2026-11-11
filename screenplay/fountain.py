@@ -182,7 +182,7 @@ def parse(snapshot: str):
             else:
                 break
 
-        elements = [_element("scene_heading", hline.text.strip())]
+        elements = [_element("scene_heading", hline.text.strip(), start=hline.start, end=hline.end)]
         state = "action"  # 'action' or 'dialogue'
         for k in range(hi + 1, last_in_scene + 1):
             li = lines[k]
@@ -195,24 +195,24 @@ def parse(snapshot: str):
             if _FORCED_BREAK_RE.search(t):
                 problems.append(Problem("FORCED_PAGE_BREAK", li.index, li.start,
                                         "forced page breaks are unsupported"))
-                elements.append(_element("action", t, unsupported="FORCED_PAGE_BREAK"))
+                elements.append(_element("action", t, unsupported="FORCED_PAGE_BREAK", start=li.start, end=li.end))
                 continue
 
             if _SECTION_RE.match(t):
                 problems.append(Problem("SECTION_HEADING", li.index, li.start,
                                         "section headings (#) are unsupported"))
-                elements.append(_element("action", t, unsupported="SECTION_HEADING"))
+                elements.append(_element("action", t, unsupported="SECTION_HEADING", start=li.start, end=li.end))
                 continue
 
             if _TRANSITION_RE.match(t):
-                elements.append(_element("transition", t.strip()))
+                elements.append(_element("transition", t.strip(), start=li.start, end=li.end))
                 state = "action"
                 continue
 
             fm = _FORCED_CHAR_RE.match(t)
             if fm:
                 elements.append(_element("character", fm.group(1), speaker=fm.group(1),
-                                         forced=True))
+                                         forced=True, start=li.start, end=li.end))
                 state = "dialogue"
                 continue
 
@@ -220,10 +220,10 @@ def parse(snapshot: str):
             if pm:
                 if state == "dialogue":
                     elements.append(_element("parenthetical", t.strip(),
-                                             content=pm.group(1)))
+                                             content=pm.group(1), start=li.start, end=li.end))
                     continue
                 # A parenthetical in action position: keep as action (unusual).
-                elements.append(_element("action", t))
+                elements.append(_element("action", t, start=li.start, end=li.end))
                 continue
 
             if _is_all_caps(t):
@@ -232,7 +232,7 @@ def parse(snapshot: str):
                     problems.append(
                         Problem("UNKNOWN_EXTENSION", li.index, li.start,
                                 f"unknown character extension '{ext}'"))
-                el = _element("character", t.strip(), speaker=speaker)
+                el = _element("character", t.strip(), speaker=speaker, start=li.start, end=li.end)
                 if ext:
                     el["extension"] = ext
                 if paren:
@@ -243,9 +243,9 @@ def parse(snapshot: str):
 
             # Non all-caps, non structural.
             if state == "dialogue":
-                elements.append(_element("dialogue", t.rstrip()))
+                elements.append(_element("dialogue", t.rstrip(), start=li.start, end=li.end))
             else:
-                elements.append(_element("action", t.rstrip()))
+                elements.append(_element("action", t.rstrip(), start=li.start, end=li.end))
 
         scene = M.Scene(
             id=f"scene-{s_no}",

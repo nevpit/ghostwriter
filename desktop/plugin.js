@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, KEYBINDS_AREA, host } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef, createContext, useContext } from 'react'
 
 const ID = 'ghostwriter'
 const API = `/api/plugins/${ID}`
@@ -51,24 +51,81 @@ const TABS = [
   ['export', 'Export'],
 ]
 
+// ---------- view preferences (theme, font, size) ----------
+// The manuscript is rendered in a theme + typeface the reader chooses, and the
+// choice persists in localStorage so it survives restarts. "default" font
+// follows the format's own convention (Courier for a screenplay, a book serif
+// for prose); an explicit pick overrides it. Everything here is plain CSS +
+// vanilla JS — no dependencies.
+const VIEW_KEY = 'gw.view.v1'
+const FONTS = {
+  serif: "Georgia, 'Times New Roman', serif",
+  sans: "-apple-system, 'Segoe UI', system-ui, sans-serif",
+  mono: "'Courier New', ui-monospace, monospace",
+}
+const FONT_LABELS = { default: 'Auto', serif: 'Serif', sans: 'Sans', mono: 'Mono' }
+const SIZES = { s: '11.5px', m: '13px', l: '15px', xl: '17px' }
+const SIZE_LABELS = { s: 'S', m: 'M', l: 'L', xl: 'XL' }
+const DEFAULT_VIEW = { theme: 'dark', font: 'default', size: 'm' }
+function loadView() {
+  try {
+    const r = localStorage.getItem(VIEW_KEY)
+    if (r) return { ...DEFAULT_VIEW, ...JSON.parse(r) }
+  } catch (_) { /* corrupt store: fall back to defaults */ }
+  return { ...DEFAULT_VIEW }
+}
+function saveView(v) { try { localStorage.setItem(VIEW_KEY, JSON.stringify(v)) } catch (_) {} }
+function useGwView() {
+  const [view, setView] = useState(loadView)
+  const update = (patch) => setView(v => { const n = { ...v, ...patch }; saveView(n); return n })
+  return [view, update]
+}
+// The effective font for the current format: an explicit pick wins, otherwise
+// the format's convention (monospace Courier for a screenplay, a serif for prose).
+function effectiveFont(view, isProse) {
+  if (view.font !== 'default' && FONTS[view.font]) return FONTS[view.font]
+  return isProse ? FONTS.serif : FONTS.mono
+}
+
 // ---------- formatted reading view (Fountain conventions) ----------
 
-function El({ e }) {
+function El({ e, sceneId, elIndex }) {
+  const search = useContext(SearchCtx)
   const t = e.text == null ? '' : String(e.text)
+  const sceneHits = (search && sceneId != null && elIndex != null) ? search.matchesByScene[sceneId] : null
+  const hits = sceneHits ? sceneHits[elIndex] : null
+  const cm = search ? search.currentMatch : -1
+  // Highlight a single-line block. `text` is the rendered (possibly uppercased)
+  // text; the hit offsets were computed on the raw text (same length, so they
+  // still line up).
+  const hl = (text) => (hits && text) ? renderHighlighted(text, hits, cm) : text
+  // Highlight a multi-line block (dialogue): map each hit onto its line.
+  const hlLines = (text) => {
+    const lines = String(text).split('\n')
+    if (!hits || !hits.length) return lines.map((line, i) => jsx('div', { key: i, children: line }))
+    let lineStart = 0
+    return lines.map((line, i) => {
+      const lineEnd = lineStart + line.length
+      const lineHits = hits
+        .filter((h) => h.start >= lineStart && h.end <= lineEnd)
+        .map((h) => ({ start: h.start - lineStart, end: h.end - lineStart, globalIndex: h.globalIndex }))
+      lineStart = lineEnd + 1
+      return jsx('div', { key: i, children: lineHits.length ? renderHighlighted(line, lineHits, cm) : line })
+    })
+  }
   switch (e.kind) {
     case 'scene_heading':
-      return jsx('div', { className: 'f-scene', children: t.toUpperCase() })
+      return jsx('div', { className: 'f-scene', children: hl(t.toUpperCase()) })
     case 'character':
-      return jsx('div', { className: 'f-char', children: t.toUpperCase() })
+      return jsx('div', { className: 'f-char', children: hl(t.toUpperCase()) })
     case 'parenthetical':
-      return jsx('div', { className: 'f-paren', children: t })
+      return jsx('div', { className: 'f-paren', children: hl(t) })
     case 'dialogue':
-      return jsxs('div', { className: 'f-dialogue', children:
-        t.split('\n').map((line, i) => jsx('div', { key: i, children: line })) })
+      return jsx('div', { className: 'f-dialogue', children: hlLines(t) })
     case 'transition':
-      return jsx('div', { className: 'f-trans', children: t.toUpperCase() })
+      return jsx('div', { className: 'f-trans', children: hl(t.toUpperCase()) })
     default:
-      return jsx('div', { className: 'f-action', children: t })
+      return jsx('div', { className: 'f-action', children: hl(t) })
   }
 }
 
@@ -85,22 +142,98 @@ function SceneView({ scene }) {
   ] })
 }
 
+// ---------- search / find & replace ----------
+// Search hits are computed client-side over the *visible* text (each scene's
+// slugline + body-element text), so a hit maps 1:1 onto a rendered node — no
+// snapshot-offset bookkeeping. The replace operates on the raw Fountain source
+// (via the snapshot endpoint); for a word search the Nth visible hit == the Nth
+// source occurrence, so "replace current" is unambiguous.
+const SearchCtx = createContext(null)
+
+function findMatchesInText(text, query) {
+  const hits = []
+  const q = String(query || '').toLowerCase()
+  if (!q) return hits
+  const lower = String(text == null ? '' : text).toLowerCase()
+  let idx = 0
+  for (;;) {
+    const i = lower.indexOf(q, idx)
+    if (i === -1) break
+    hits.push({ start: i, end: i + q.length })
+    idx = i + q.length
+  }
+  return hits
+}
+
+// Render `text` with each hit wrapped in <mark class="hsp-mark">. Hits carry
+// {start, end, globalIndex}; the current hit gets .hsp-mark-current.
+function renderHighlighted(text, hits, currentMatch) {
+  if (!hits || !hits.length) return text
+  const out = []
+  let pos = 0
+  hits.forEach((h, i) => {
+    if (h.start > pos) out.push(text.slice(pos, h.start))
+    out.push(jsx('mark', {
+      className: 'hsp-mark' + (h.globalIndex === currentMatch ? ' hsp-mark-current' : ''),
+      key: 'm' + i,
+      'data-match': h.globalIndex,
+      children: text.slice(h.start, h.end),
+    }))
+    pos = h.end
+  })
+  if (pos < text.length) out.push(text.slice(pos))
+  return out
+}
+
+// Case-insensitive replace in `text`. `occurrence` is 'all' or a 0-based index
+// (replace only the Nth occurrence). Returns {text, count, replaced}.
+function replaceInText(text, query, replacement, occurrence) {
+  const q = String(query || '').toLowerCase()
+  if (!q) return { text, count: 0, replaced: 0 }
+  const lower = String(text).toLowerCase()
+  let result = ''
+  let i = 0, count = 0, replaced = 0
+  for (;;) {
+    const idx = lower.indexOf(q, i)
+    if (idx === -1) break
+    count++
+    if (occurrence === 'all' || count - 1 === occurrence) {
+      result += text.slice(i, idx) + replacement
+      replaced++
+    } else {
+      result += text.slice(i, idx + q.length)
+    }
+    i = idx + q.length
+  }
+  result += text.slice(i)
+  return { text: result, count, replaced }
+}
+
 // One scene in the full-script scroll view: a labelled section whose
 // elements render with the same Fountain styling, carrying data-scene-id so
 // the scroll-spy can tell which scene is under the top edge.
 function FullScene({ scene, index }) {
+  const search = useContext(SearchCtx)
   const allEls = Array.isArray(scene.elements) && scene.elements.length ? scene.elements : null
   // The heading is already shown in the labelled section header above; skip the
   // leading scene_heading element so it doesn't render a second time.
   const bodyEls = allEls ? allEls.filter((e) => e.kind !== 'scene_heading') : null
+  // Heading highlight: the slugline renders uppercased; hits were computed on
+  // the raw heading (same offsets, so they line up).
+  let headingContent = scene.heading || '(untitled scene)'
+  if (search && scene.heading) {
+    const sceneHits = search.matchesByScene[scene.id]
+    const hits = sceneHits ? sceneHits.heading : null
+    if (hits) headingContent = renderHighlighted(scene.heading.toUpperCase(), hits, search.currentMatch)
+  }
   return jsxs('div', { className: 'hsp-full-scene', 'data-scene-id': scene.id, children: [
     jsxs('div', { className: 'hsp-full-heading', children: [
       jsx('span', { className: 'hsp-full-idx', children: String(index + 1) }),
-      jsx('span', { className: 'hsp-full-title', children: scene.heading || '(untitled scene)' }),
+      jsx('span', { className: 'hsp-full-title', children: headingContent }),
       scene.parse_ok === false ? jsx('span', { className: 'hsp-hint', children: '  ⚠ parse issues' }) : null
     ] }),
     (bodyEls && bodyEls.length)
-      ? bodyEls.map((e, i) => jsx(El, { e, key: i }))
+      ? bodyEls.map((e, i) => jsx(El, { e, sceneId: scene.id, elIndex: i, key: i }))
       : (allEls ? null : jsx('pre', { className: 'hsp-raw', children: scene.text || '' }))
   ] })
 }
@@ -115,16 +248,22 @@ function FullScene({ scene, index }) {
 // the prose pack renders book conventions (Part / Chapter / Section). New
 // formats add a pack here keyed by their engine `name`.
 
-function ProsePara({ e }) {
+function ProsePara({ e, sceneId, elIndex }) {
+  const search = useContext(SearchCtx)
   const t = e.text == null ? '' : String(e.text)
   if (!t.trim()) return null
-  return jsx('div', { className: 'prose-para', children: t })
+  const sceneHits = (search && sceneId != null && elIndex != null) ? search.matchesByScene[sceneId] : null
+  const hits = sceneHits ? sceneHits[elIndex] : null
+  const cm = search ? search.currentMatch : -1
+  const content = (hits && t) ? renderHighlighted(t, hits, cm) : t
+  return jsx('div', { className: 'prose-para', children: content })
 }
 
 // One prose block (Part / Chapter / Section / front matter) in the scroll view.
 // It layers book styling on hsp-full-scene (inheriting spacing + the
 // data-scene-id hook the scroll-spy and edit prefill rely on).
 function ProseBlock({ scene, index }) {
+  const search = useContext(SearchCtx)
   const kind = scene.kind || 'front'
   const paras = Array.isArray(scene.elements) ? scene.elements : []
   const titleCls = {
@@ -134,10 +273,14 @@ function ProseBlock({ scene, index }) {
   }[kind]
   const kids = []
   if (scene.heading) {
-    kids.push(jsx('div', { className: titleCls || '', children: scene.heading }, 'title'))
+    let headContent = scene.heading
+    const sceneHits = search ? search.matchesByScene[scene.id] : null
+    const hits = sceneHits ? sceneHits.heading : null
+    if (hits) headContent = renderHighlighted(scene.heading, hits, search.currentMatch)
+    kids.push(jsx('div', { className: titleCls || '', children: headContent }, 'title'))
   }
   paras.forEach((p, j) => {
-    if (p && p.kind === 'paragraph') kids.push(jsx(ProsePara, { e: p, key: 'p' + j }))
+    if (p && p.kind === 'paragraph') kids.push(jsx(ProsePara, { e: p, sceneId: scene.id, elIndex: j, key: 'p' + j }))
   })
   return jsx('div', {
     className: 'hsp-full-scene prose-block prose-block-' + kind,
@@ -242,6 +385,14 @@ function ScreenplayPane() {
   const [pdf, setPdf] = useState(null)           // { loading, meta, dataUrl, error }
   const [confirmId, setConfirmId] = useState(null) // history row awaiting confirm
   const [importPanel, setImportPanel] = useState(null) // { name, title, author, text }
+  const [newProject, setNewProject] = useState(null) // { title, author, format, text }
+  const [view, updateView] = useGwView()               // { theme, font, size } — persisted
+  // Search / find & replace. `searchQuery` is '' when the bar is closed;
+  // `currentMatch` is the global index of the highlighted hit (-1 = none).
+  const [searchQuery, setSearchQuery] = useState('')
+  const [replaceQuery, setReplaceQuery] = useState('')
+  const [currentMatch, setCurrentMatch] = useState(-1)
+  const [chatOpen, setChatOpen] = useState(false)  // side-by-side chat rail (feature #3)
 
   // Full-script scroll view: keep the scene list in sync with the scroll
   // position (scroll-spy) and let list clicks jump the scroll position.
@@ -293,9 +444,120 @@ function ScreenplayPane() {
     () => Object.fromEntries(scenes.map(s => [s.id, s])),
     [scenes])
   const activeRevId = data ? data.active_revision_id : null
+  // Track the freshest active revision id for find & replace. It mirrors the
+  // query value but is also bumped from each successful snapshot write, so a
+  // quick follow-up replace never sends a stale base (STALE_REVISION) while the
+  // project query is still refetching.
+  const activeRevIdRef = useRef(activeRevId)
+  useEffect(() => { activeRevIdRef.current = activeRevId }, [activeRevId])
   const projectFormat = (data && data.project && data.project.format) || 'screenplay'
   const isProse = projectFormat === 'prose'
   const pack = VIEW_PACKS[projectFormat] || VIEW_PACKS.screenplay
+
+  // ---- search / find & replace (feature #2) ----
+  // Search hits, computed over the *visible* text (each scene's slugline + body
+  // elements), in document order. Each hit carries a global index (0..N-1) that
+  // drives the next/prev highlight and "replace current".
+  const matches = useMemo(() => {
+    if (!searchQuery) return []
+    const all = []
+    let gi = 0
+    for (const scene of scenes) {
+      const heading = scene.heading || ''
+      if (heading) {
+        for (const h of findMatchesInText(heading, searchQuery)) {
+          all.push({ scene_id: scene.id, el: 'heading', start: h.start, end: h.end, globalIndex: gi++ })
+        }
+      }
+      const bodyEls = (scene.elements || []).filter((e) => e.kind !== 'scene_heading')
+      bodyEls.forEach((e, i) => {
+        const t = e.text == null ? '' : String(e.text)
+        if (!t) return
+        for (const h of findMatchesInText(t, searchQuery)) {
+          all.push({ scene_id: scene.id, el: i, start: h.start, end: h.end, globalIndex: gi++ })
+        }
+      })
+    }
+    return all
+  }, [searchQuery, scenes])
+
+  // Group hits by scene so the renderers can look up their own hits (the
+  // slugline is keyed under the string 'heading', body elements under their index).
+  const matchesByScene = useMemo(() => {
+    const map = {}
+    for (const m of matches) {
+      if (!map[m.scene_id]) map[m.scene_id] = {}
+      if (!map[m.scene_id][m.el]) map[m.scene_id][m.el] = []
+      map[m.scene_id][m.el].push(m)
+    }
+    return map
+  }, [matches])
+
+  const searchState = useMemo(
+    () => (searchQuery ? { query: searchQuery, matchesByScene, currentMatch } : null),
+    [searchQuery, matchesByScene, currentMatch]
+  )
+
+  // Move the highlighted hit by one step (wrapping around).
+  const stepMatch = (delta) => {
+    if (!matches.length) return
+    const base = currentMatch < 0 ? 0 : currentMatch
+    setCurrentMatch(((base + delta) % matches.length + matches.length) % matches.length)
+  }
+
+  // Find & replace: edit the raw Fountain source. For a word search the Nth
+  // visible hit == the Nth source occurrence, so this is unambiguous. The title
+  // page (metadata before the first scene) is left untouched so the hit count
+  // matches what's visible.
+  const doReplace = async (occurrence) => {
+    if (!pid || !searchQuery || busy) return
+    // The "Replace" button passes the 'current' sentinel for the highlighted
+    // hit; resolve it to that hit's global index. replaceInText only understands
+    // 'all' or a numeric index, so passing 'current' through verbatim matched
+    // nothing and always reported "No replacement made."
+    const target = occurrence === 'current' ? currentMatch : occurrence
+    if (target !== 'all' && (!Number.isInteger(target) || target < 0)) {
+      setNotice({ kind: 'err', text: 'Nothing highlighted to replace.' })
+      return
+    }
+    setBusy(true)
+    // Delegate to the backend's structure-aware replace. It matches at the
+    // element level in the same document order as the highlights and
+    // uppercases a matching character-cue name, so the all-caps cue (and the
+    // rest of the Fountain formatting) is preserved. The old blind client-side
+    // string replace lowercased character cues and collapsed dialogue into action.
+    const call = (revId) => api(`/projects/${encodeURIComponent(pid)}/replace`, {
+      method: 'POST',
+      body: { query: searchQuery, replacement: replaceQuery || '', target, revision_id: revId },
+    })
+    try {
+      let res
+      try {
+        res = await call(activeRevIdRef.current)
+      } catch (e) {
+        // A stale base (e.g. the agent saved in the meantime) is recoverable:
+        // resync to the current active revision and retry once.
+        const p = await api(`/projects/${encodeURIComponent(pid)}`)
+        activeRevIdRef.current = p && p.active_revision_id
+        res = await call(activeRevIdRef.current)
+      }
+      if (res && res.revision_id) activeRevIdRef.current = res.revision_id
+      setNotice({ kind: 'ok', text: `Replaced ${res.replaced} occurrence${res.replaced === 1 ? '' : 's'}.` })
+      invalidateAll()
+    } catch (e) {
+      setNotice({ kind: 'err', text: `Replace failed: ${errInfo(e).text}` })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Keep the current hit in view when it changes.
+  useEffect(() => {
+    if (currentMatch < 0) return
+    const box = fullRef.current
+    const el = box && box.querySelector(`mark[data-match="${currentMatch}"]`)
+    if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [currentMatch])
 
   // Auto-select a project; drop selection if it disappeared.
   useEffect(() => {
@@ -436,9 +698,18 @@ function ScreenplayPane() {
     if (!draft || !pid) return false
     setBusy(true); setNotice(null)
     try {
+      // `draft.text` is the full edited region (slugline + body). The save
+      // endpoint expects the heading + the body *without* the heading, so split
+      // here — otherwise the slugline is prepended twice and the scene collapses
+      // to just the slugline on re-parse. The edited slugline (first non-blank
+      // line) is sent as `heading`.
+      const lines = String(draft.text || '').split('\n')
+      let hi = 0
+      while (hi < lines.length && !lines[hi].trim()) hi++
+      const bodyText = lines.slice(hi + 1).join('\n')
       await api(`/projects/${pid}/scenes/${draft.sceneId}`, {
         method: 'POST',
-        body: { content: draft.text, revision_id: activeRevId }
+        body: { content: bodyText, heading: lines[hi], revision_id: activeRevId }
       })
       setDraft(null)
       setNotice({ kind: 'ok', text: 'Scene saved as a new revision.' })
@@ -616,6 +887,33 @@ function ScreenplayPane() {
     }
   }
 
+  async function doNewProject() {
+    if (!newProject) return
+    const title = (newProject.title || '').trim()
+    if (!title) { setNotice({ kind: 'err', text: 'Give the project a title first.' }); return }
+    setBusy(true)
+    try {
+      const p = await api('/projects', { method: 'POST', body: {
+        title,
+        author: (newProject.author || '').trim(),
+        format: newProject.format || 'screenplay',
+        fountain_text: newProject.text || ''
+      } })
+      setNewProject(null)
+      setSceneId(null)
+      setDraft(null)
+      setEditing(false)
+      setPid(p.id)
+      setTab('script')
+      setNotice({ kind: 'ok', text: `Created "${p.title}".` })
+      await invalidateAll()
+    } catch (e) {
+      setNotice({ kind: 'err', text: `Create failed: ${errInfo(e).text}` })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function doExportFountain() {
     if (!pid) return
     setBusy(true)
@@ -683,10 +981,16 @@ function ScreenplayPane() {
           ? `${statusQ.data.projects} project${statusQ.data.projects === 1 ? '' : 's'} · v${statusQ.data.hermes_version}`
           : (failed ? 'backend unavailable' : 'connecting…') }),
       jsx('button', {
-        className: 'hsp-btn hsp-btn-small hsp-btn-primary',
-        title: 'Open the Ghostwriter chat session',
-        onClick: openGhostwriterChat,
+        className: 'hsp-btn hsp-btn-small hsp-btn-primary' + (chatOpen ? ' hsp-btn-on' : ''),
+        title: chatOpen ? 'Close the side-by-side chat' : 'Chat with Ghostwriter side-by-side',
+        onClick: () => { const next = !chatOpen; setChatOpen(next); if (next) setTab('script') },
         children: '💬 Chat'
+      }),
+      jsx('button', {
+        className: 'hsp-btn hsp-btn-small',
+        title: 'Create a new project from scratch (no file needed)',
+        onClick: () => setNewProject({ title: '', author: '', format: 'screenplay', text: '' }),
+        children: '+ New'
       }),
       jsxs('label', { className: 'hsp-btn hsp-btn-small', title: 'Import a screenplay (Fountain, text, Final Draft .fdx, PDF) or a book (Markdown)', children: [
         'Import…',
@@ -733,7 +1037,7 @@ function ScreenplayPane() {
 
   // ---------------- Script tab ----------------
 
-  const scriptTab = !pid
+  const scriptInner = !pid
     ? null
     : loading
       ? jsx('div', { className: 'hsp-muted', children: 'Loading project…' })
@@ -765,6 +1069,57 @@ function ScreenplayPane() {
                     (scene.heading || '(untitled scene)') + (dirty ? '  ● unsaved' : '') }),
                   !editing ? jsx('button', { className: 'hsp-btn hsp-btn-small', onClick: startEdit, children: 'Edit' }) : null
                 ] }) : null,
+                // View settings: theme + font + size (persisted in localStorage).
+                jsxs('div', { className: 'hsp-viewbar', children: [
+                  jsx('button', {
+                    className: 'hsp-btn hsp-btn-small hsp-iconbtn', type: 'button',
+                    title: view.theme === 'dark' ? 'Switch to light (paper) theme' : 'Switch to dark theme',
+                    onClick: () => updateView({ theme: view.theme === 'dark' ? 'light' : 'dark' }),
+                    children: view.theme === 'dark' ? '☀' : '☾'
+                  }),
+                  jsx('span', { className: 'hsp-viewbar-sep', children: '|' }),
+                  jsx('span', { className: 'hsp-viewbar-label', children: 'Font' }),
+                  jsx('select', {
+                    className: 'hsp-select hsp-vbsel', value: view.font,
+                    onChange: (e) => updateView({ font: e.target.value }),
+                    children: Object.keys(FONT_LABELS).map(k => jsx('option', { value: k, key: k, children: FONT_LABELS[k] }))
+                  }),
+                  jsx('span', { className: 'hsp-viewbar-label', children: 'Size' }),
+                  jsx('select', {
+                    className: 'hsp-select hsp-vbsel', value: view.size,
+                    onChange: (e) => updateView({ size: e.target.value }),
+                    children: Object.keys(SIZE_LABELS).map(k => jsx('option', { value: k, key: k, children: SIZE_LABELS[k] }))
+                  }),
+                ] }),
+                // Search / find & replace bar (persistent; highlights appear as you type).
+                jsxs('div', { className: 'hsp-searchbar', children: [
+                  jsx('span', { className: 'hsp-searchbar-ico', children: '🔍' }),
+                  jsx('input', {
+                    className: 'hsp-searchbar-input', type: 'text',
+                    placeholder: 'Search…', value: searchQuery,
+                    onChange: (e) => { setSearchQuery(e.target.value); setCurrentMatch(-1) },
+                    onKeyDown: (e) => {
+                      if (e.key === 'Enter') stepMatch(e.shiftKey ? -1 : 1)
+                      else if (e.key === 'Escape') { setSearchQuery(''); setCurrentMatch(-1) }
+                    }
+                  }),
+                  matches.length
+                    ? jsxs('span', { className: 'hsp-searchbar-count', children: [
+                        (currentMatch < 0 ? 0 : currentMatch + 1), '/', matches.length
+                      ] })
+                    : null,
+                  jsx('button', { className: 'hsp-btn hsp-btn-small', title: 'Previous match (Shift+Enter)', disabled: !matches.length, onClick: () => stepMatch(-1), children: '↑' }),
+                  jsx('button', { className: 'hsp-btn hsp-btn-small', title: 'Next match (Enter)', disabled: !matches.length, onClick: () => stepMatch(1), children: '↓' }),
+                  jsx('span', { className: 'hsp-viewbar-sep', children: '|' }),
+                  jsx('input', {
+                    className: 'hsp-searchbar-input', type: 'text',
+                    placeholder: 'Replace with…', value: replaceQuery,
+                    onChange: (e) => setReplaceQuery(e.target.value)
+                  }),
+                  jsx('button', { className: 'hsp-btn hsp-btn-small', title: 'Replace the highlighted match', disabled: !matches.length || currentMatch < 0 || busy, onClick: () => doReplace('current'), children: 'Replace' }),
+                  jsx('button', { className: 'hsp-btn hsp-btn-small', title: 'Replace every match', disabled: !matches.length || busy, onClick: () => doReplace('all'), children: 'All' }),
+                  jsx('button', { className: 'hsp-btn hsp-btn-small hsp-iconbtn', title: 'Close search', onClick: () => { setSearchQuery(''); setReplaceQuery(''); setCurrentMatch(-1) }, children: '×' })
+                ] }),
                 editing && draft
                   ? jsxs('div', { className: 'hsp-editor', children: [
                       jsx('textarea', {
@@ -793,6 +1148,19 @@ function ScreenplayPane() {
                     ] })
               ] })
             ] })
+
+  // Side-by-side split (feature #3): when the Chat rail is open, the manuscript
+  // shares the Script tab with a compact chat column — read your text and talk
+  // to the model at the same time, in the same view (no separate window/tab).
+  const scriptTab = chatOpen
+    ? jsxs('div', { className: 'hsp-split', children: [
+        jsx('div', { className: 'hsp-split-main', children: scriptInner }),
+        jsx(GwChat, {
+          projectTitle: (data && data.project && data.project.title) || null,
+          onClose: () => setChatOpen(false)
+        })
+      ] })
+    : scriptInner
 
   // ---------------- Proposals tab ----------------
 
@@ -1051,20 +1419,63 @@ function ScreenplayPane() {
     ] })
   ] }) : null
 
-  return jsxs('div', { className: 'hsp-pane', children: [
+  const newProjectEl = newProject ? jsxs('div', { className: 'hsp-import', children: [
+    jsxs('div', { className: 'hsp-import-head', children: [
+      jsx('span', { className: 'hsp-import-title', children: 'New project' }),
+      jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-ghost', disabled: busy, onClick: () => setNewProject(null), children: '✕' })
+    ] }),
+    jsx('div', { className: 'hsp-hint', children: 'Start from scratch — no file needed. Paste Fountain or Markdown, or leave it blank and build it in chat.' }),
+    jsxs('div', { className: 'hsp-import-field', children: [
+      jsx('label', { children: 'Title' }),
+      jsx('input', { className: 'hsp-input', autoFocus: true, value: newProject.title, placeholder: 'My screenplay', onChange: (e) => setNewProject({ ...newProject, title: e.target.value }) })
+    ] }),
+    jsxs('div', { className: 'hsp-import-field', children: [
+      jsx('label', { children: 'Author' }),
+      jsx('input', { className: 'hsp-input', value: newProject.author, placeholder: 'Optional', onChange: (e) => setNewProject({ ...newProject, author: e.target.value }) })
+    ] }),
+    jsxs('div', { className: 'hsp-import-field', children: [
+      jsx('label', { children: 'Format' }),
+      jsx('select', { className: 'hsp-select', value: newProject.format, onChange: (e) => setNewProject({ ...newProject, format: e.target.value }), children: [
+        jsx('option', { value: 'screenplay', children: 'Screenplay (Fountain)' }),
+        jsx('option', { value: 'prose', children: 'Book (Markdown)' })
+      ] })
+    ] }),
+    jsxs('div', { className: 'hsp-import-field', children: [
+      jsx('label', { children: 'Initial text (optional — leave blank to start empty)' }),
+      jsx('textarea', { className: 'hsp-textarea hsp-textarea-small', value: newProject.text, placeholder: newProject.format === 'prose' ? 'Paste Markdown…' : 'Paste Fountain…', onChange: (e) => setNewProject({ ...newProject, text: e.target.value }) })
+    ] }),
+    jsxs('div', { className: 'hsp-actions', children: [
+      jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy || !(newProject.title || '').trim(), onClick: () => doNewProject(),
+        children: busy ? 'Creating…' : 'Create project' }),
+      jsx('button', { className: 'hsp-btn', disabled: busy, onClick: () => setNewProject(null), children: 'Cancel' })
+    ] })
+  ] }) : null
+
+  return jsx(SearchCtx.Provider, { value: searchState, children: jsxs('div', {
+    className: 'hsp-pane',
+    'data-gw-theme': view.theme,
+    style: {
+      '--gw-font': effectiveFont(view, isProse),
+      '--gw-size': SIZES[view.size] || SIZES.m,
+    },
+    children: [
     header,
     projectPicker,
     tabBar,
     noticeEl,
     importPanelEl,
+    newProjectEl,
     failed
       ? jsxs('div', { className: 'hsp-error', children: [
           jsx('div', { children: `Backend error: ${String((projectsQ.error && projectsQ.error.message) || projectsQ.error)}` }),
           jsx('button', { className: 'hsp-btn', onClick: () => projectsQ.refetch(), children: 'Retry' })
         ] })
       : emptyProjects
-        ? jsx('div', { className: 'hsp-empty', children:
-            'No projects yet. Create one in chat — e.g. “create a screenplay project called X” or “import this Fountain file: …”.' })
+        ? jsxs('div', { className: 'hsp-empty', children: [
+            jsx('div', { children: 'No projects yet.' }),
+            jsx('button', { className: 'hsp-btn hsp-btn-primary', onClick: () => setNewProject({ title: '', author: '', format: 'screenplay', text: '' }), children: '+ New project' }),
+            jsx('div', { className: 'hsp-hint', children: 'Or create one in chat — e.g. “create a screenplay project called X” or “import this Fountain file: …”.' })
+          ] })
         : connecting
           ? jsx('div', { className: 'hsp-muted', children: 'Connecting…' })
           : !pid
@@ -1095,7 +1506,7 @@ function ScreenplayPane() {
         ] })
       ] })
     ] })
-  ] })
+  ] }) })
 }
 
 const CSS = `
@@ -1237,6 +1648,57 @@ select.hsp-select option { background: #141418; color: #f0f0f4; }
 .hsp-dd-item { appearance: none; border: 1px solid transparent; background: transparent; color: inherit; text-align: left; padding: 6px 10px; border-radius: 7px; cursor: pointer; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hsp-dd-item:hover { background: rgba(255,255,255,0.10); }
 .hsp-dd-item-active { background: rgba(255,255,255,0.16); color: #ffffff; font-weight: 600; }
+/* ---- View settings: font + size + light "paper" theme ----
+   --gw-font / --gw-size are set inline on .hsp-pane (see effectiveFont/SIZES).
+   The reading surface (paper) switches between the host's dark surface and a
+   warm-white light theme; the chrome (header, tabs, scene head) keeps the
+   host theme. All of this is plain CSS — no dependencies. */
+.hsp-full-scene, .prose-block { font-family: var(--gw-font, 'Courier New', ui-monospace, monospace); font-size: var(--gw-size, 13px); }
+.hsp-full-heading { font-size: var(--gw-size, 13px); }
+.hsp-pane[data-gw-theme="light"] .hsp-full { background: #f7f4ee; color: #1c1a17; border-color: #d8d2c6; }
+.hsp-pane[data-gw-theme="light"] .hsp-full-scene { border-bottom-color: rgba(28,26,23,0.10); }
+.hsp-pane[data-gw-theme="light"] .hsp-full-idx { opacity: 0.55; }
+.hsp-viewbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hsp-viewbar-label { opacity: 0.6; font-size: 11.5px; }
+.hsp-viewbar-sep { opacity: 0.3; font-size: 11px; }
+/* search / find & replace bar */
+.hsp-searchbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.hsp-searchbar-ico { opacity: 0.6; font-size: 13px; }
+.hsp-searchbar-input { flex: 1 1 120px; min-width: 96px; padding: 4px 8px; border-radius: 7px; border: 1px solid color-mix(in oklab, currentColor 30%, transparent); background: #141418; color: #f0f0f4; font-size: 12.5px; }
+.hsp-searchbar-input::placeholder { color: color-mix(in oklab, currentColor 45%, transparent); }
+.hsp-searchbar-count { opacity: 0.6; font-size: 11.5px; white-space: nowrap; }
+/* search highlights: yellow background, blue font; the current hit is stronger. */
+.hsp-mark { background: #ffe873; color: #1a3fbf; border-radius: 2px; padding: 0 1px; }
+.hsp-mark-current { background: #ffcf33; color: #102a9e; box-shadow: 0 0 0 1px #ffcf33; }
+.hsp-vbsel { width: auto; min-width: 74px; padding: 3px 7px; font-size: 11.5px; background: transparent; color: inherit; }
+select.hsp-vbsel option { background: #141418; color: #f0f0f4; }
+.hsp-iconbtn { padding: 3px 9px; font-size: 14px; line-height: 1; }
+/* ---- side-by-side chat rail (feature #3) ----
+   The manuscript and the chat share the Script tab: a two-column grid where the
+   text stays on the left and a compact, plugin-owned chat docks on the right —
+   read and talk at once, no separate window. Colors follow the host theme via
+   currentColor/color-mix, so it works in both dark and light host themes. */
+.hsp-btn-on { border-color: currentColor; background: color-mix(in oklab, currentColor 16%, transparent); }
+.hsp-split { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 32vw, 400px); grid-template-rows: minmax(0, 1fr); gap: 10px; flex: 1; min-height: 0; }
+.hsp-split-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.gw-chat { display: flex; flex-direction: column; height: 100%; min-height: 0; border: 1px solid color-mix(in oklab, currentColor 14%, transparent); border-radius: 10px; background: color-mix(in oklab, currentColor 4%, transparent); overflow: hidden; }
+.gw-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-bottom: 1px solid color-mix(in oklab, currentColor 14%, transparent); }
+.gw-chat-title { font-weight: 650; font-size: 12.5px; display: flex; align-items: baseline; gap: 4px; min-width: 0; }
+.gw-chat-proj { opacity: 0.55; font-weight: 400; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gw-chat-close { padding: 2px 8px; font-size: 12px; flex: none; }
+.gw-chat-list { flex: 1; min-height: 0; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.gw-chat-empty { opacity: 0.6; font-size: 12px; line-height: 1.5; }
+.gw-msg { display: flex; flex-direction: column; gap: 2px; max-width: 100%; }
+.gw-msg-user { align-items: flex-end; }
+.gw-msg-asst { align-items: flex-start; }
+.gw-msg-text { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; line-height: 1.5; padding: 6px 9px; border-radius: 8px; max-width: 100%; }
+.gw-msg-user .gw-msg-text { background: color-mix(in oklab, currentColor 12%, transparent); }
+.gw-msg-asst .gw-msg-text { background: transparent; opacity: 0.92; }
+.gw-chat-err { margin: 0 10px 8px; }
+.gw-chat-input { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid color-mix(in oklab, currentColor 14%, transparent); align-items: flex-end; }
+.gw-chat-field { flex: 1; resize: none; background: transparent; color: inherit; border: 1px solid color-mix(in oklab, currentColor 22%, transparent); border-radius: 8px; padding: 6px 8px; font-size: 12.5px; line-height: 1.4; font-family: inherit; }
+.gw-chat-field::placeholder { color: color-mix(in oklab, currentColor 45%, transparent); }
+.gw-chat-send { flex: none; padding: 6px 12px; }
 `
 
 // ---------- Ghostwriter chat session (Design 1) ----------
@@ -1252,7 +1714,6 @@ select.hsp-select option { background: #141418; color: #f0f0f4; }
 // We adopt the existing row when present (history survives restarts) and only
 // create when there is none.
 const GHOSTWRITER_TITLE = 'Ghostwriter'
-let ghostwriterSessionPromise = null
 async function getGhostwriterSession() {
   try {
     // Indexed `WHERE title = ?` (not a live listing): reaches idle rows.
@@ -1273,19 +1734,135 @@ async function getGhostwriterSession() {
   }
   return host.request('session.create', { title: GHOSTWRITER_TITLE })
 }
-async function openGhostwriterChat() {
-  if (!ghostwriterSessionPromise) ghostwriterSessionPromise = getGhostwriterSession()
-  try {
-    const s = await ghostwriterSessionPromise
-    if (!s) return
-    // Adopted rows carry the compression-lineage tip as resolved_id (open the
-    // tip); a fresh create reports stored_session_id. Bare id is the fallback.
-    const sid = s.resolved_id || s.stored_session_id || s.id || s.session_id
-    if (sid) host.openSession(sid)
-  } catch (e) {
-    ghostwriterSessionPromise = null // let a later click retry a failed open
-    console.error('[ghostwriter] open chat failed:', e)
+// The side-by-side chat rail (feature #3). A compact, plugin-owned chat that
+// renders BESIDE the manuscript in the same view, so the user reads their text
+// and talks to the model at once — no separate window or tab. It drives the same
+// title-adopted Ghostwriter session as the Chat button: the transcript loads via
+// session.history, prompts go through prompt.submit, and the live reply streams
+// over message.* events. Every event is filtered to this session's id, so a chat
+// happening elsewhere can't bleed into the rail. Zero dependencies — plain React
+// state + the host's gateway bridge.
+function GwChat({ projectTitle, onClose }) {
+  const [sid, setSid] = useState(null)
+  const [messages, setMessages] = useState([]) // { role, text }[]
+  const [input, setInput] = useState('')
+  const [streamText, setStreamText] = useState('')
+  const [streaming, setStreaming] = useState(false)
+  const [waiting, setWaiting] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+  const listRef = useRef(null)
+  const streamRef = useRef('')     // in-progress assistant text (read on complete)
+  const turnActive = useRef(false) // true between message.start and message.complete
+
+  // Resolve the shared Ghostwriter session and load its transcript.
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const s = await getGhostwriterSession()
+        if (!alive || !s) return
+        // Adopted rows carry the compression-lineage tip as resolved_id; a fresh
+        // create reports stored_session_id. Bare id is the fallback.
+        const id = s.resolved_id || s.stored_session_id || s.id || s.session_id
+        if (!alive || !id) return
+        setSid(id)
+        const h = await host.request('session.history', { session_id: id })
+        if (!alive) return
+        const msgs = (h && Array.isArray(h.messages))
+          ? h.messages.map((m) => ({ role: m.role, text: m.text || '' })).filter((m) => m.text)
+          : []
+        setMessages(msgs)
+      } catch (e) {
+        if (alive) setError(`Chat unavailable: ${errInfo(e).text}`)
+      }
+    })()
+    return () => { alive = false }
+  }, [])
+
+  // Stream the live reply for THIS session only.
+  useEffect(() => {
+    if (!sid) return
+    const onStart = (ev) => {
+      if (ev.session_id !== sid) return
+      turnActive.current = true
+      streamRef.current = ''
+      setStreamText(''); setStreaming(true); setWaiting(false); setError(null)
+    }
+    const onDelta = (ev) => {
+      if (ev.session_id !== sid || !turnActive.current) return
+      const t = ev.payload && typeof ev.payload.text === 'string' ? ev.payload.text : ''
+      if (t) { streamRef.current += t; setStreamText(streamRef.current) }
+    }
+    const onDone = (ev) => {
+      if (ev.session_id !== sid) return
+      const p = ev.payload || {}
+      turnActive.current = false
+      // Prefer the gateway's authoritative final text; fall back to what streamed.
+      const finalText = (typeof p.text === 'string' && p.text) ? p.text : streamRef.current
+      streamRef.current = ''
+      setStreamText(''); setStreaming(false); setWaiting(false); setBusy(false)
+      if (finalText.trim()) setMessages((m) => [...m, { role: 'assistant', text: finalText }])
+      if (p.error) setError(String(p.error))
+      else if (p.status === 'interrupted') setError('Reply was interrupted.')
+    }
+    const d1 = host.onEvent('message.start', onStart)
+    const d2 = host.onEvent('message.delta', onDelta)
+    const d3 = host.onEvent('message.complete', onDone)
+    return () => { if (d1) d1(); if (d2) d2(); if (d3) d3() }
+  }, [sid])
+
+  // Keep the newest message in view.
+  useEffect(() => {
+    const el = listRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [messages, streamText, streaming, waiting])
+
+  async function send() {
+    const text = input.trim()
+    if (!text || !sid || busy) return
+    setBusy(true); setWaiting(true); setInput(''); setError(null)
+    setMessages((m) => [...m, { role: 'user', text }])
+    try {
+      await host.request('prompt.submit', { session_id: sid, text })
+    } catch (e) {
+      setBusy(false); setWaiting(false); setStreaming(false)
+      setError(`Send failed: ${errInfo(e).text}`)
+    }
   }
+
+  const live = waiting || streaming || streamText
+  const empty = messages.length === 0 && !live
+  return jsxs('div', { className: 'gw-chat', children: [
+    jsxs('div', { className: 'gw-chat-head', children: [
+      jsxs('div', { className: 'gw-chat-title', children: [
+        '💬 Ghostwriter',
+        projectTitle ? jsx('span', { className: 'gw-chat-proj', children: ' · ' + projectTitle }) : null
+      ] }),
+      jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-ghost gw-chat-close', title: 'Close chat', onClick: onClose, children: '✕' })
+    ] }),
+    jsx('div', { className: 'gw-chat-list', ref: listRef, children:
+      empty
+        ? jsx('div', { className: 'gw-chat-empty', children: 'Say something — e.g. “write a cold open for scene 1” or “tighten the dialogue in the café scene.”' })
+        : messages.map((m, i) => jsx('div', {
+            className: 'gw-msg ' + (m.role === 'user' ? 'gw-msg-user' : 'gw-msg-asst'), key: i,
+            children: jsx('div', { className: 'gw-msg-text', children: m.text })
+          }))
+    }),
+    live && jsx('div', { className: 'gw-msg gw-msg-asst', children: jsx('div', {
+      className: 'gw-msg-text', children: (streamText ? streamText + '▍' : 'Thinking…')
+    }) }),
+    error ? jsx('div', { className: 'hsp-notice hsp-notice-err gw-chat-err', children: error }) : null,
+    jsxs('div', { className: 'gw-chat-input', children: [
+      jsx('textarea', {
+        className: 'gw-chat-field', value: input, rows: '2',
+        placeholder: 'Message Ghostwriter… (Enter to send, Shift+Enter for a newline)',
+        onChange: (e) => setInput(e.target.value),
+        onKeyDown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }
+      }),
+      jsx('button', { className: 'hsp-btn hsp-btn-primary gw-chat-send', disabled: busy || !input.trim(), onClick: send, children: busy ? '…' : 'Send' })
+    ] })
+  ] })
 }
 
 export default {

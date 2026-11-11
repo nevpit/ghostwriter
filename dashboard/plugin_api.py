@@ -128,6 +128,33 @@ async def save_scene(project_id: str, scene_id: str, request: Request):
     return _dc(rev)
 
 
+@router.post("/projects/{project_id}/snapshot")
+async def save_snapshot_endpoint(project_id: str, request: Request):
+    """Replace a revision's full snapshot (the raw Fountain source). Used by the
+    desktop find & replace, which edits the raw source directly. ``revision_id``
+    pins the expected active revision (optimistic concurrency — a stale base is
+    rejected with STALE_REVISION)."""
+    body = await request.json()
+    rev = _guard(get_service().save_snapshot, project_id, body["content"], body.get("revision_id"))
+    return _dc(rev)
+
+
+@router.post("/projects/{project_id}/replace")
+async def replace_endpoint(project_id: str, request: Request):
+    """Structure-aware find & replace. Replaces occurrences of ``query``
+    (case-insensitive) with ``replacement`` at the element level so Fountain
+    formatting -- all-caps character cues, scene headings, etc. -- is never
+    broken. ``target`` is either ``"all"`` or a 0-based global match index
+    (the client's highlighted hit, which matches the document order used
+    here). A matching character-cue name is uppercased so the cue survives
+    re-parse. Returns the new revision id and the number replaced."""
+    body = await request.json()
+    out = _guard(get_service().find_replace, project_id,
+                 body.get("query", ""), body.get("replacement", ""),
+                 body.get("target"), body.get("revision_id"))
+    return _dc(out)
+
+
 @router.put("/projects/{project_id}/rules")
 async def update_rules(project_id: str, request: Request):
     """Create a new (active) rules version.
@@ -168,7 +195,7 @@ async def import_project(request: Request):
     else:
         p = _guard(get_service().import_project,
                    body.get("title", ""), body.get("author", ""),
-                   body.get("fountain_text", ""))
+                   body.get("fountain_text", ""), body.get("format"))
     return _dc(p)
 
 

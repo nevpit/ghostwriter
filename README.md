@@ -2,7 +2,7 @@
 
 A local screenplay workspace for Hermes Agent: Fountain parsing, immutable
 revisions, a proposal workflow with deterministic validation, and stdlib PDF
-export. Ships as **11 agent tools** plus a **desktop pane**. No third-party
+export. Ships as **14 agent tools** plus a **desktop pane**. No third-party
 runtime dependencies (Python stdlib + SQLite only).
 
 Tested against **Hermes v0.22.7** (git install `b200f5bc60e3`).
@@ -27,7 +27,7 @@ Tested against **Hermes v0.22.7** (git install `b200f5bc60e3`).
 ```
 ghostwriter/
   plugin.yaml              # manifest: name, version, provides_tools
-  __init__.py              # agent entry point: register(ctx) -> 13 tools
+  __init__.py              # agent entry point: register(ctx) -> 14 tools
   screenplay/              # the service package (pure stdlib)
     models.py              # dataclasses + ServiceError + HERMES_VERSION
     fountain.py            # offset-accurate Fountain parser + op application
@@ -51,6 +51,10 @@ ghostwriter/
     plugin_api.py          # FastAPI APIRouter (exec'd by the web server)
   desktop/
     plugin.js              # Desktop SDK pane (react/jsx-runtime, no JSX transform)
+  skills/                  # bundled per-format skills (auto-registered in __init__.py)
+    screenplay/            # served read-only as ghostwriter:screenplay
+      SKILL.md
+      references/          # authoring-and-import.md, plugin-code-changes.md
   tests/
     fixtures/sample.fountain
     test_*.py              # parser / service / rendering / tools / api
@@ -90,6 +94,34 @@ justified serif paragraphs, a navigator indented by part/chapter/section).
 Export is format-aware as well (Fountain vs Markdown), and a header badge shows
 the active format. Unknown formats fall back to the screenplay pack.
 
+## Naming & organization standard
+
+Ghostwriter is growing from a screenplay tool into a multi-format authoring app
+(screenplays now; novels, essays, TV scripts, and more later). Every format
+follows the same shape:
+
+| Layer | Convention | Screenplay (now) | Later |
+|---|---|---|---|
+| Plugin | fixed app identity | `ghostwriter` | — |
+| **Skill** | `ghostwriter:<doctype>` — bare format name, no verb/suffix | `ghostwriter:screenplay` | `ghostwriter:novel`, `ghostwriter:essay` |
+| Skill dir | `skills/<doctype>/SKILL.md` (+ `references/`) | `skills/screenplay/` | `skills/novel/`, … |
+| Engine | one `DocumentEngine` per format | `formats/screenplay.py` | `formats/novel.py`, … |
+| Shared tools | format-agnostic project/revision/scene ops | `ghost_*` | new core tools: `ghostwriter_*` |
+
+Rules:
+- **One skill per format**, named by the bare format name. The `ghostwriter:` namespace
+  carries the app identity, so the bare name is just the format: `screenplay`, not
+  `screenplay-edits`. Skills are **bundled in the plugin** (`skills/<doctype>/`) and
+  auto-registered in `__init__.py`; they are served read-only as `ghostwriter:<doctype>`
+  (not copied into `~/.hermes/skills/`), so they update with the plugin. A user who wants
+  a customized copy writes their own skill under a separate name; it is never overwritten
+  by a plugin update.
+- **One engine per format** under `screenplay/formats/`; the service core stays format-agnostic.
+- **Shared tools stay format-agnostic** (`ghost_*` operate on the generic project/revision/scene
+  model); a capability that is genuinely format-specific gets a format-qualified name.
+- Add a format by adding `skills/<doctype>/` + `formats/<doctype>.py` and a `register_skill`/
+  engine entry; no renames of existing formats.
+
 ## Install
 
 The plugin is a **user plugin** — drop it in the user plugin dir and enable it.
@@ -104,7 +136,7 @@ find ~/.hermes/plugins/ghostwriter -name __pycache__ -type d -exec rm -rf {} +
 # 2) enable it (adds it to plugins.enabled in config.yaml)
 hermes plugins enable ghostwriter
 
-# 3) verify the real runtime loads it (13 tools registered)
+# 3) verify the real runtime loads it (14 tools registered)
 hermes plugins doctor ghostwriter
 ```
 
@@ -154,6 +186,7 @@ All in toolset `screenplay`, returning JSON `{"success": ...}`:
 | `ghost_export_pdf` | export active/any revision to PDF |
 | `ghost_restore` | restore an earlier snapshot as a new revision |
 | `ghost_undo` | restore the previous revision (undo the latest change) |
+| `ghost_find_replace` | structure-aware find/replace (format-safe, preserves case + ALL-CAPS cues) |
 
 ## Implementation notes
 
@@ -173,9 +206,9 @@ All in toolset `screenplay`, returning JSON `{"success": ...}`:
   count); it is not a full industry-standard screenplay page template.
 - A fully-authenticated **live** HTTP route probe and the in-GUI pane render
   require a running desktop session (gateway ticket / app refresh) — verified
-  here via the real-loader `doctor` (13 tools), the `TestClient` router tests,
+  here via the real-loader `doctor` (14 tools), the `TestClient` router tests,
   and the live gateway mounting the route (HTTP 401 auth gate, not 404).
 - The **agent-in-the-loop** turn (the configured model itself calling
-  `ghost_propose` with generated text) is not exercised headlessly; the 13
+  `ghost_propose` with generated text) is not exercised headlessly; the 14
   tools are registered and the full service workflow they drive is demonstrated
   end-to-end.

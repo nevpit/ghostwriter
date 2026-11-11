@@ -164,6 +164,24 @@ def _undo(args):
     rev = svc.undo_latest(args["project_id"])
     return _ok(revision=_dc(rev))
 
+@_tool
+def _find_replace(args):
+    """Structure-aware find & replace (same path as the desktop Find & Replace).
+
+    Preserves Fountain element structure: a character cue whose name matches is
+    uppercased so the all-caps cue survives re-parse and the dialogue block is
+    never collapsed into action."""
+    svc = get_service()
+    target = args.get("target", "all")
+    if isinstance(target, str) and target.strip().isdigit():
+        target = int(target)
+    out = svc.find_replace(
+        args["project_id"], args.get("query", ""), args.get("replacement", ""),
+        target, revision_id=args.get("revision_id"),
+    )
+    rev = svc.read_revision(args["project_id"], out["revision_id"])
+    return _ok(revision_id=out["revision_id"], replaced=out["replaced"],
+               count=out["count"], revision=_dc(rev))
 
 # ---- schemas + registry -----------------------------------------------------
 
@@ -260,4 +278,16 @@ TOOLS = [
              "revision whose content is the state before the latest change.",
              {"project_id": {"type": "string"}}, required=["project_id"]),
      _undo, "↩️"),
+    ("ghost_find_replace",
+     _schema("ghost_find_replace",
+             "Replace occurrences of a search term (case-insensitive) with a new "
+             "value while preserving Fountain structure -- a character cue whose "
+             "name matches is kept all-caps so the format is never broken. Use it "
+             "to rename characters or make any in-place edit. target is 'all' or a "
+             "0-based match index (as a string).",
+             {"project_id": {"type": "string"}, "query": {"type": "string"},
+              "replacement": {"type": "string"}, "target": {"type": "string"},
+              "revision_id": {"type": "string"}},
+             required=["project_id", "query", "replacement"]),
+     _find_replace, "🔁"),
 ]
