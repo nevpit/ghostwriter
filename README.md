@@ -37,8 +37,6 @@ ghostwriter/
     formats/               # one module per supported format
       __init__.py          # build_default_registry() -> EngineRegistry
       screenplay.py        # ScreenplayEngine: Fountain parse/validate/render/import
-      prose.py             # ProseEngine: Markdown parse/validate/render/import
-      prose_render.py      # pure-stdlib book-style PDF writer (prose)
     rendering.py           # pure-stdlib Courier PDF writer (screenplay)
     validation.py          # deterministic proposal validator
     runtime.py             # process-wide get_service() singleton + reset_service()
@@ -68,31 +66,24 @@ record), splices it by byte offset, and manages revisions / proposals / rules /
 findings. Everything format-specific — parsing into blocks, applying edits,
 validating, rendering to PDF, and importing alternate files — is delegated to a
 `DocumentEngine` (see `screenplay/engine.py`), resolved per project by
-`Project.format`. Two engines are registered by default:
+`Project.format`. The MVP registers a single engine:
 
-- **`screenplay`** (engine #1) — Fountain, delegating to the existing
+- **`screenplay`** — Fountain, delegating to the existing
   `fountain` / `validation` / `rendering` / `importers` modules.
-- **`prose`** (engine #2) — long-form Markdown books. Parses a document into
-  nestable blocks (`#` part, `##` chapter, `###` section, pre-heading front
-  matter), validates word/part/chapter-count targets from the rules `limits`,
-  renders a book-style PDF (`prose_render.py`), and round-trips losslessly to
-  Markdown.
 
-`import_file` auto-detects the format from the extension (`.md`/`.markdown`/
-`.docx` → prose; everything else → screenplay), and `export_markdown` returns a
-prose document's canonical Markdown. New media (novels, docs, video scripts, …)
-are added by registering another engine under `screenplay/formats/` without
-touching the service core. The agent tool surface and plugin name are unchanged
-in this phase.
+The engine registry is intentionally kept so a new format (a book/novel
+engine, a poem engine, …) is a matter of adding one module under
+`screenplay/formats/` and registering it in `build_default_registry()` — the
+service core, agent tool surface, and plugin name never change. `import_file`
+maps a file extension to a format in `service._detect_format` (today every
+import is a screenplay), and export is format-aware via the engine.
 
 The desktop pane is format-aware too: it dispatches on `Project.format` to a
 per-format **view pack** (`VIEW_PACKS` in `desktop/plugin.js`) that supplies how
 that format's blocks render in the reading view and how they're labelled in the
-navigator. The screenplay pack reproduces the Fountain reading view exactly; the
-prose pack renders book conventions (centered part/chapter titles, indented
-justified serif paragraphs, a navigator indented by part/chapter/section).
-Export is format-aware as well (Fountain vs Markdown), and a header badge shows
-the active format. Unknown formats fall back to the screenplay pack.
+navigator. The screenplay pack reproduces the Fountain reading view exactly, and
+a header badge shows the active format. Unknown formats fall back to the
+screenplay pack.
 
 ## Naming & organization standard
 

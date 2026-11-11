@@ -131,12 +131,12 @@ class ScreenplayService:
 
     @staticmethod
     def _detect_format(filename: str) -> str:
-        """Default format for an imported file by extension. Prose extensions
-        (``.md``/``.markdown``/``.docx``) map to the prose engine; everything else
-        keeps the screenplay default, so existing screenplay imports are unchanged."""
-        name = (filename or "").lower()
-        if name.endswith((".md", ".markdown", ".docx")):
-            return "prose"
+        """Default format for an imported file by extension.
+
+        The MVP ships a single engine (screenplay), so every import uses that
+        default regardless of extension. When more formats are added, map their
+        extensions here (e.g. ``.md`` -> a prose/book engine) so the caller never
+        has to pass a format explicitly."""
         return engine.DEFAULT_FORMAT
 
     def list_projects(self) -> List[M.Project]:
@@ -750,27 +750,6 @@ class ScreenplayService:
             "author": p.author,
             "filename": filename,
             "fountain": snapshot,
-            "size_bytes": len(snapshot.encode("utf-8")),
-        }
-
-    def export_markdown(self, project_id: str,
-                        revision_id: Optional[str] = None) -> dict:
-        """Serialize a prose revision back to Markdown (the snapshot IS the
-        canonical Markdown, so this is a lossless round-trip). Mirrors
-        :meth:`export_fountain` for the prose format."""
-        p = self.get_project(project_id)
-        rev = self.read_revision(project_id, revision_id or p.active_revision_id)
-        title = (p.title or "document").strip()
-        safe = "".join(c if (c.isalnum() or c in " -_.") else "_" for c in title).strip()
-        filename = (safe or "document") + ".md"
-        snapshot = rev.snapshot
-        return {
-            "project_id": p.id,
-            "revision_id": rev.id,
-            "title": p.title,
-            "author": p.author,
-            "filename": filename,
-            "markdown": snapshot,
             "size_bytes": len(snapshot.encode("utf-8")),
         }
 

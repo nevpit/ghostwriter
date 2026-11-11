@@ -277,11 +277,3 @@ def export_fountain(project_id: str, revision_id: Optional[str] = None):
     text + a suggested ``.fountain`` filename). The Desktop pane turns this
     into a file download so the script can be opened in Fountain/Final Draft."""
     return _guard(get_service().export_fountain, project_id, revision_id)
-
-
-@router.get("/projects/{project_id}/markdown")
-def export_markdown(project_id: str, revision_id: Optional[str] = None):
-    """Serialize a prose revision back to Markdown (lossless — the snapshot IS
-    the canonical Markdown). JSON body with the ``markdown`` text + a suggested
-    ``.md`` filename. For screenplay projects this returns the Fountain source."""
-    return _guard(get_service().export_markdown, project_id, revision_id)

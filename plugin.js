@@ -54,9 +54,8 @@ const TABS = [
 // ---------- view preferences (theme, font, size) ----------
 // The manuscript is rendered in a theme + typeface the reader chooses, and the
 // choice persists in localStorage so it survives restarts. "default" font
-// follows the format's own convention (Courier for a screenplay, a book serif
-// for prose); an explicit pick overrides it. Everything here is plain CSS +
-// vanilla JS — no dependencies.
+// follows the format's own convention (Courier for a screenplay); an explicit
+// pick overrides it. Everything here is plain CSS + vanilla JS — no dependencies.
 const VIEW_KEY = 'gw.view.v1'
 const FONTS = {
   serif: "Georgia, 'Times New Roman', serif",
@@ -81,10 +80,10 @@ function useGwView() {
   return [view, update]
 }
 // The effective font for the current format: an explicit pick wins, otherwise
-// the format's convention (monospace Courier for a screenplay, a serif for prose).
-function effectiveFont(view, isProse) {
+// the format's convention (monospace Courier for the screenplay).
+function effectiveFont(view) {
   if (view.font !== 'default' && FONTS[view.font]) return FONTS[view.font]
-  return isProse ? FONTS.serif : FONTS.mono
+  return FONTS.mono
 }
 
 // ---------- formatted reading view (Fountain conventions) ----------
@@ -244,52 +243,8 @@ function FullScene({ scene, index }) {
 //   Block({scene, index}) -> component for the full-manuscript scroll view; it
 //     must carry data-scene-id so the scroll-spy and the Edit prefill work.
 //   navText(scene)        -> the spans for one navigator row.
-// The screenplay pack reuses FullScene + the existing row (identical output);
-// the prose pack renders book conventions (Part / Chapter / Section). New
-// formats add a pack here keyed by their engine `name`.
-
-function ProsePara({ e, sceneId, elIndex }) {
-  const search = useContext(SearchCtx)
-  const t = e.text == null ? '' : String(e.text)
-  if (!t.trim()) return null
-  const sceneHits = (search && sceneId != null && elIndex != null) ? search.matchesByScene[sceneId] : null
-  const hits = sceneHits ? sceneHits[elIndex] : null
-  const cm = search ? search.currentMatch : -1
-  const content = (hits && t) ? renderHighlighted(t, hits, cm) : t
-  return jsx('div', { className: 'prose-para', children: content })
-}
-
-// One prose block (Part / Chapter / Section / front matter) in the scroll view.
-// It layers book styling on hsp-full-scene (inheriting spacing + the
-// data-scene-id hook the scroll-spy and edit prefill rely on).
-function ProseBlock({ scene, index }) {
-  const search = useContext(SearchCtx)
-  const kind = scene.kind || 'front'
-  const paras = Array.isArray(scene.elements) ? scene.elements : []
-  const titleCls = {
-    part: 'prose-title-part',
-    chapter: 'prose-title-chapter',
-    section: 'prose-title-section',
-  }[kind]
-  const kids = []
-  if (scene.heading) {
-    let headContent = scene.heading
-    const sceneHits = search ? search.matchesByScene[scene.id] : null
-    const hits = sceneHits ? sceneHits.heading : null
-    if (hits) headContent = renderHighlighted(scene.heading, hits, search.currentMatch)
-    kids.push(jsx('div', { className: titleCls || '', children: headContent }, 'title'))
-  }
-  paras.forEach((p, j) => {
-    if (p && p.kind === 'paragraph') kids.push(jsx(ProsePara, { e: p, sceneId: scene.id, elIndex: j, key: 'p' + j }))
-  })
-  return jsx('div', {
-    className: 'hsp-full-scene prose-block prose-block-' + kind,
-    'data-scene-id': scene.id,
-    children: kids,
-  })
-}
-
-const NAV_KIND_TAG = { part: 'Pt', chapter: 'Ch', section: '§', front: '·' }
+// The MVP ships the screenplay pack only. New formats add a pack here keyed by
+// their engine `name`.
 
 const VIEW_PACKS = {
   screenplay: {
@@ -298,16 +253,6 @@ const VIEW_PACKS = {
       jsx('span', { className: 'hsp-nav-idx', children: String((s.order || 0) + 1) }),
       jsx('span', { children: s.heading || '(untitled)' }),
     ],
-  },
-  prose: {
-    Block: ProseBlock,
-    navText: (s) => {
-      const kind = s.kind || 'front'
-      return [
-        jsx('span', { className: 'hsp-nav-idx', children: NAV_KIND_TAG[kind] || '·' }),
-        jsx('span', { className: 'prose-nav-title prose-nav-' + kind, children: s.heading || '(untitled)' }),
-      ]
-    },
   },
 }
 
@@ -393,6 +338,8 @@ function ScreenplayPane() {
   const [replaceQuery, setReplaceQuery] = useState('')
   const [currentMatch, setCurrentMatch] = useState(-1)
   const [chatOpen, setChatOpen] = useState(false)  // side-by-side chat rail (feature #3)
+  const [chatWidth, setChatWidth] = useState(loadChatWidth) // resizable chat column width
+  const [resizing, setResizing] = useState(false)   // drag-to-resize in progress
 
   // Full-script scroll view: keep the scene list in sync with the scroll
   // position (scroll-spy) and let list clicks jump the scroll position.
@@ -402,6 +349,7 @@ function ScreenplayPane() {
   const spyRaf = useRef(0)           // requestAnimationFrame throttle handle
   const goToTimer = useRef(0)        // timeout that clears suppressSpy
   const sceneIdRef = useRef(sceneId) // latest sceneId, readable inside the scroll handler
+  const splitRef = useRef(null)      // the split container (resize math)
   useEffect(() => { sceneIdRef.current = sceneId }, [sceneId])
 
   const statusQ = useQuery({
@@ -451,7 +399,6 @@ function ScreenplayPane() {
   const activeRevIdRef = useRef(activeRevId)
   useEffect(() => { activeRevIdRef.current = activeRevId }, [activeRevId])
   const projectFormat = (data && data.project && data.project.format) || 'screenplay'
-  const isProse = projectFormat === 'prose'
   const pack = VIEW_PACKS[projectFormat] || VIEW_PACKS.screenplay
 
   // ---- search / find & replace (feature #2) ----
@@ -928,20 +875,6 @@ function ScreenplayPane() {
     }
   }
 
-  async function doExportMarkdown() {
-    if (!pid) return
-    setBusy(true)
-    try {
-      const r = await api(`/projects/${pid}/markdown`, { method: 'GET' })
-      downloadText(r.markdown, r.filename)
-      setNotice({ kind: 'ok', text: `Exported ${r.filename} (${r.size_bytes} bytes).` })
-    } catch (e) {
-      setNotice({ kind: 'err', text: `Markdown export failed: ${errInfo(e).text}` })
-    } finally {
-      setBusy(false)
-    }
-  }
-
   function downloadText(text, filename) {
     try {
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
@@ -974,7 +907,7 @@ function ScreenplayPane() {
   const header = jsxs('div', { className: 'hsp-header', children: [
     jsx('div', { className: 'hsp-title', children: 'Ghostwriter' }),
     data ? jsx('span', { className: 'hsp-sub', title: 'Document format',
-      children: isProse ? 'Prose' : 'Script' }) : null,
+      children: 'Script' }) : null,
     jsxs('div', { className: 'hsp-header-right', children: [
       jsx('span', { className: 'hsp-sub', children:
         statusQ.data
@@ -992,7 +925,7 @@ function ScreenplayPane() {
         onClick: () => setNewProject({ title: '', author: '', format: 'screenplay', text: '' }),
         children: '+ New'
       }),
-      jsxs('label', { className: 'hsp-btn hsp-btn-small', title: 'Import a screenplay (Fountain, text, Final Draft .fdx, PDF) or a book (Markdown)', children: [
+      jsxs('label', { className: 'hsp-btn hsp-btn-small', title: 'Import a screenplay (Fountain, text, Final Draft .fdx, PDF)', children: [
         'Import…',
         jsx('input', { type: 'file', accept: '.fountain,.fdx,.pdf,.txt,.xml,.text,.md,text/plain,application/pdf', style: { display: 'none' }, onChange: onImportFile })
       ] })
@@ -1142,22 +1075,48 @@ function ScreenplayPane() {
                   : jsxs('div', { className: 'hsp-full', ref: fullRef, onScroll: onFullScroll, children: [
                       scenes.map((s, i) => jsx(pack.Block, { scene: s, index: i, key: s.id })),
                       jsx('div', { className: 'hsp-hint hsp-full-hint', children:
-                        isProse
-                          ? 'Scroll to read the whole manuscript — the list highlights the block at the top edge. Click a block to jump; use Edit to change it.'
-                          : 'Scroll to read the whole script — the list highlights the scene at the top edge. Click a scene to jump; use Edit to change it.' })
+                        'Scroll to read the whole script — the list highlights the scene at the top edge. Click a scene to jump; use Edit to change it.' })
                     ] })
               ] })
             ] })
 
+  // Drag the divider to resize the chat column (width persists per user).
+  function onResizeStart(e) {
+    e.preventDefault()
+    setResizing(true)
+    const onMove = (ev) => {
+      const el = splitRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const w = Math.max(260, Math.min(Math.max(280, rect.width - 360), Math.round(rect.right - ev.clientX)))
+      setChatWidth(w)
+      saveChatWidth(w)
+    }
+    const onUp = () => {
+      setResizing(false)
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      try { document.body.style.cursor = ''; document.body.style.userSelect = '' } catch (_) {}
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    try { document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none' } catch (_) {}
+  }
   // Side-by-side split (feature #3): when the Chat rail is open, the manuscript
   // shares the Script tab with a compact chat column — read your text and talk
   // to the model at the same time, in the same view (no separate window/tab).
   const scriptTab = chatOpen
-    ? jsxs('div', { className: 'hsp-split', children: [
+    ? jsxs('div', { className: 'hsp-split', ref: splitRef, children: [
         jsx('div', { className: 'hsp-split-main', children: scriptInner }),
-        jsx(GwChat, {
-          projectTitle: (data && data.project && data.project.title) || null,
-          onClose: () => setChatOpen(false)
+        jsx('div', {
+          className: 'gw-resize-handle' + (resizing ? ' gw-resize-active' : ''),
+          onMouseDown: onResizeStart
+        }),
+        jsx('div', { className: 'gw-chat-col', style: { width: chatWidth + 'px' }, children:
+          jsx(GwChatRail, {
+            projects, currentPid: pid, currentData: data,
+            onClose: () => setChatOpen(false)
+          })
         })
       ] })
     : scriptInner
@@ -1377,18 +1336,12 @@ function ScreenplayPane() {
           jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-ghost', onClick: () => setPdf(null), children: 'Dismiss' })
         ] })
     ] }),
-    !isProse ? jsxs('div', { className: 'hsp-export-fountain', children: [
+    jsxs('div', { className: 'hsp-export-fountain', children: [
       jsx('div', { className: 'hsp-list-label', children:
         'Fountain (.fountain) — opens in Fountain, Final Draft, Highland, or any Fountain-compatible tool' }),
       jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy, onClick: () => doExportFountain(),
         children: busy ? 'Preparing…' : 'Export current revision as Fountain' })
     ] })
-      : jsxs('div', { className: 'hsp-export-markdown', children: [
-        jsx('div', { className: 'hsp-list-label', children:
-          'Markdown (.md) — the document’s canonical Markdown source (lossless round-trip)' }),
-        jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy, onClick: () => doExportMarkdown(),
-          children: busy ? 'Preparing…' : 'Export current revision as Markdown' })
-      ] })
   ] })
 
   const emptyProjects = !failed && projectsQ.data && projects.length === 0
@@ -1424,7 +1377,7 @@ function ScreenplayPane() {
       jsx('span', { className: 'hsp-import-title', children: 'New project' }),
       jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-ghost', disabled: busy, onClick: () => setNewProject(null), children: '✕' })
     ] }),
-    jsx('div', { className: 'hsp-hint', children: 'Start from scratch — no file needed. Paste Fountain or Markdown, or leave it blank and build it in chat.' }),
+    jsx('div', { className: 'hsp-hint', children: 'Start from scratch — no file needed. Paste Fountain, or leave it blank and build it in chat.' }),
     jsxs('div', { className: 'hsp-import-field', children: [
       jsx('label', { children: 'Title' }),
       jsx('input', { className: 'hsp-input', autoFocus: true, value: newProject.title, placeholder: 'My screenplay', onChange: (e) => setNewProject({ ...newProject, title: e.target.value }) })
@@ -1434,15 +1387,8 @@ function ScreenplayPane() {
       jsx('input', { className: 'hsp-input', value: newProject.author, placeholder: 'Optional', onChange: (e) => setNewProject({ ...newProject, author: e.target.value }) })
     ] }),
     jsxs('div', { className: 'hsp-import-field', children: [
-      jsx('label', { children: 'Format' }),
-      jsx('select', { className: 'hsp-select', value: newProject.format, onChange: (e) => setNewProject({ ...newProject, format: e.target.value }), children: [
-        jsx('option', { value: 'screenplay', children: 'Screenplay (Fountain)' }),
-        jsx('option', { value: 'prose', children: 'Book (Markdown)' })
-      ] })
-    ] }),
-    jsxs('div', { className: 'hsp-import-field', children: [
       jsx('label', { children: 'Initial text (optional — leave blank to start empty)' }),
-      jsx('textarea', { className: 'hsp-textarea hsp-textarea-small', value: newProject.text, placeholder: newProject.format === 'prose' ? 'Paste Markdown…' : 'Paste Fountain…', onChange: (e) => setNewProject({ ...newProject, text: e.target.value }) })
+      jsx('textarea', { className: 'hsp-textarea hsp-textarea-small', value: newProject.text, placeholder: 'Paste Fountain…', onChange: (e) => setNewProject({ ...newProject, text: e.target.value }) })
     ] }),
     jsxs('div', { className: 'hsp-actions', children: [
       jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy || !(newProject.title || '').trim(), onClick: () => doNewProject(),
@@ -1455,7 +1401,7 @@ function ScreenplayPane() {
     className: 'hsp-pane',
     'data-gw-theme': view.theme,
     style: {
-      '--gw-font': effectiveFont(view, isProse),
+      '--gw-font': effectiveFont(view),
       '--gw-size': SIZES[view.size] || SIZES.m,
     },
     children: [
@@ -1578,18 +1524,6 @@ select.hsp-select option { background: #141418; color: #f0f0f4; }
 .f-paren { text-align: center; font-style: italic; padding: 0 26%; opacity: 0.9; }
 .f-dialogue { text-align: center; padding: 0 14%; }
 .f-trans { text-align: right; font-weight: 600; }
-/* Prose (book) reading view — layered on hsp-full-scene so the scroll-spy and
-   spacing work for free; override the monospace with a book-like serif and add
-   part/chapter/section hierarchy. */
-.prose-block { font-family: Georgia, 'Times New Roman', serif; font-size: 13px; line-height: 1.6; }
-.prose-block-part { padding-top: 30px; }
-.prose-title-part { text-align: center; font-size: 22px; font-weight: 600; letter-spacing: 0.01em; padding: 6px 0 2px; }
-.prose-title-chapter { text-align: center; font-size: 17px; font-weight: 600; padding: 2px 0; }
-.prose-title-section { font-size: 13.5px; font-weight: 700; padding-top: 10px; }
-.prose-para { text-indent: 1.4em; margin: 0 0 8px; }
-.prose-nav-title { font-weight: 600; }
-.prose-nav-chapter { margin-left: 12px; }
-.prose-nav-section { margin-left: 24px; font-weight: 400; opacity: 0.85; }
 .hsp-raw { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; margin: 0; opacity: 0.9; }
 .hsp-editor { display: flex; flex-direction: column; gap: 8px; }
 .hsp-textarea { width: 100%; box-sizing: border-box; min-height: 260px; resize: vertical; background: transparent; color: inherit; border: 1px solid color-mix(in oklab, currentColor 22%, transparent); border-radius: 8px; padding: 8px; font-family: 'Courier New', ui-monospace, monospace; font-size: 12.5px; line-height: 1.5; }
@@ -1653,7 +1587,7 @@ select.hsp-select option { background: #141418; color: #f0f0f4; }
    The reading surface (paper) switches between the host's dark surface and a
    warm-white light theme; the chrome (header, tabs, scene head) keeps the
    host theme. All of this is plain CSS — no dependencies. */
-.hsp-full-scene, .prose-block { font-family: var(--gw-font, 'Courier New', ui-monospace, monospace); font-size: var(--gw-size, 13px); }
+.hsp-full-scene { font-family: var(--gw-font, 'Courier New', ui-monospace, monospace); font-size: var(--gw-size, 13px); }
 .hsp-full-heading { font-size: var(--gw-size, 13px); }
 .hsp-pane[data-gw-theme="light"] .hsp-full { background: #f7f4ee; color: #1c1a17; border-color: #d8d2c6; }
 .hsp-pane[data-gw-theme="light"] .hsp-full-scene { border-bottom-color: rgba(28,26,23,0.10); }
@@ -1679,13 +1613,33 @@ select.hsp-vbsel option { background: #141418; color: #f0f0f4; }
    read and talk at once, no separate window. Colors follow the host theme via
    currentColor/color-mix, so it works in both dark and light host themes. */
 .hsp-btn-on { border-color: currentColor; background: color-mix(in oklab, currentColor 16%, transparent); }
-.hsp-split { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 32vw, 400px); grid-template-rows: minmax(0, 1fr); gap: 10px; flex: 1; min-height: 0; }
-.hsp-split-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.gw-chat { display: flex; flex-direction: column; height: 100%; min-height: 0; border: 1px solid color-mix(in oklab, currentColor 14%, transparent); border-radius: 10px; background: color-mix(in oklab, currentColor 4%, transparent); overflow: hidden; }
-.gw-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-bottom: 1px solid color-mix(in oklab, currentColor 14%, transparent); }
-.gw-chat-title { font-weight: 650; font-size: 12.5px; display: flex; align-items: baseline; gap: 4px; min-width: 0; }
-.gw-chat-proj { opacity: 0.55; font-weight: 400; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gw-chat-close { padding: 2px 8px; font-size: 12px; flex: none; }
+.hsp-split { display: flex; flex-direction: row; align-items: stretch; flex: 1; min-height: 0; }
+.hsp-split-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.gw-resize-handle { flex: none; width: 12px; margin: 0 2px; cursor: col-resize; display: flex; align-items: center; justify-content: center; touch-action: none; }
+.gw-resize-handle::before { content: ''; width: 3px; height: 44px; border-radius: 3px; background: color-mix(in oklab, currentColor 16%, transparent); transition: background .15s ease, height .15s ease; }
+.gw-resize-handle:hover::before, .gw-resize-handle.gw-resize-active::before { background: color-mix(in oklab, currentColor 42%, transparent); height: 64px; }
+.gw-chat-col { flex: none; min-width: 260px; min-height: 0; display: flex; flex-direction: column; }
+.gw-rail { display: flex; flex-direction: column; flex: 1; min-height: 0; border: 1px solid color-mix(in oklab, currentColor 16%, transparent); border-radius: 12px; background: color-mix(in oklab, currentColor 4%, transparent); overflow: hidden; }
+.gw-rail-head { display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-bottom: 1px solid color-mix(in oklab, currentColor 14%, transparent); flex: none; }
+.gw-tabs { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; padding-right: 2px; }
+.gw-tab { display: flex; align-items: center; gap: 5px; max-width: 160px; padding: 4px 6px 4px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; border: 1px solid transparent; white-space: nowrap; transition: background .12s ease, border-color .12s ease; }
+.gw-tab:hover { background: color-mix(in oklab, currentColor 8%, transparent); }
+.gw-tab-active { border-color: color-mix(in oklab, currentColor 30%, transparent); background: color-mix(in oklab, currentColor 11%, transparent); font-weight: 600; }
+.gw-tab-title { overflow: hidden; text-overflow: ellipsis; }
+.gw-tab-x { border: none; background: transparent; color: inherit; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; opacity: 0.5; border-radius: 4px; flex: none; }
+.gw-tab-x:hover { opacity: 1; background: color-mix(in oklab, currentColor 18%, transparent); }
+.gw-add-wrap { position: relative; flex: none; }
+.gw-add-btn { border: 1px solid color-mix(in oklab, currentColor 22%, transparent); background: color-mix(in oklab, currentColor 6%, transparent); color: inherit; cursor: pointer; font-size: 13px; line-height: 1; padding: 3px 9px; border-radius: 8px; }
+.gw-add-btn:hover { background: color-mix(in oklab, currentColor 12%, transparent); }
+.gw-add-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; min-width: 200px; max-width: 280px; max-height: 300px; overflow-y: auto; padding: 5px; border-radius: 10px; border: 1px solid var(--border, color-mix(in oklab, currentColor 26%, transparent)); background: var(--card, #1c1c20); box-shadow: 0 12px 34px rgba(0,0,0,0.38); }
+.gw-add-item { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; border: none; background: transparent; color: var(--foreground, #e6e6e6); cursor: pointer; font-size: 12.5px; padding: 7px 9px; border-radius: 7px; }
+.gw-add-item:hover { background: color-mix(in oklab, currentColor 12%, transparent); }
+.gw-add-item-primary { font-weight: 600; }
+.gw-add-sep { height: 1px; margin: 5px 4px; background: color-mix(in oklab, currentColor 16%, transparent); }
+.gw-add-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; opacity: 0.8; }
+.gw-add-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gw-close-btn { border: none; background: transparent; color: inherit; cursor: pointer; font-size: 13px; line-height: 1; padding: 4px 7px; border-radius: 7px; flex: none; opacity: 0.7; }
+.gw-close-btn:hover { opacity: 1; background: color-mix(in oklab, currentColor 12%, transparent); }
 .gw-chat-list { flex: 1; min-height: 0; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 .gw-chat-empty { opacity: 0.6; font-size: 12px; line-height: 1.5; }
 .gw-msg { display: flex; flex-direction: column; gap: 2px; max-width: 100%; }
@@ -1701,50 +1655,104 @@ select.hsp-vbsel option { background: #141418; color: #f0f0f4; }
 .gw-chat-send { flex: none; padding: 6px 12px; }
 `
 
-// ---------- Ghostwriter chat session (Design 1) ----------
-// A dedicated, plugin-owned Hermes session the user can talk to from the
-// Chat button / palette / keybind. The model's ghost_* tools operate on the
-// projects this page edits, so the chat and the workspace stay in sync.
-//
-// Identity is by TITLE, mirroring the built-in Bot Chat's canonical
-// forever-chat: the gateway's exact-title index makes "Ghostwriter" a stable
-// registry, so every open consults it directly. That lookup is window-free and
-// reaches the row even when the session is idle/closed across an app restart —
-// a plain live `session.list` scan would miss it there and mint a duplicate.
-// We adopt the existing row when present (history survives restarts) and only
-// create when there is none.
+// ---------- Ghostwriter chat (project-scoped, multi-tab, resizable) ----------
+// Each chat tab is bound to a project: its own Hermes session (adopted by a
+// per-tab title "Ghostwriter · <Project>", or "… · 2" for a second tab on the
+// same project), its own transcript, and a project-context block prepended to
+// every prompt so the model always knows which project_id to operate on with
+// the ghost_* tools. Open as many tabs as you like — different projects, or
+// several chats on the same project — each streams independently.
+
 const GHOSTWRITER_TITLE = 'Ghostwriter'
-async function getGhostwriterSession() {
-  try {
-    // Indexed `WHERE title = ?` (not a live listing): reaches idle rows.
-    // include_hidden guards a future hidden flag; 200 mirrors the core picker.
-    const list = await host.request('session.list', {
-      title: GHOSTWRITER_TITLE,
-      limit: 200,
-      include_hidden: true,
-    })
-    const sessions = (list && list.sessions) || []
-    const existing = sessions.find((s) =>
-      /ghostwriter/i.test(s.root_title || s.title || '')
-    )
-    if (existing) return existing
-  } catch (_) {
-    // A transient lookup failure (backend mid-warm) falls through to create;
-    // project data lives in the DB, not the session, so a fresh chat is safe.
-  }
-  return host.request('session.create', { title: GHOSTWRITER_TITLE })
+const CHAT_TABS_KEY = 'gw.chatTabs.v2'
+const CHAT_WIDTH_KEY = 'gw.chatWidth.v1'
+
+function newTabId() {
+  return 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
 }
-// The side-by-side chat rail (feature #3). A compact, plugin-owned chat that
-// renders BESIDE the manuscript in the same view, so the user reads their text
-// and talks to the model at once — no separate window or tab. It drives the same
-// title-adopted Ghostwriter session as the Chat button: the transcript loads via
-// session.history, prompts go through prompt.submit, and the live reply streams
-// over message.* events. Every event is filtered to this session's id, so a chat
-// happening elsewhere can't bleed into the rail. Zero dependencies — plain React
-// state + the host's gateway bridge.
-function GwChat({ projectTitle, onClose }) {
+function nextNumForProject(tabs, projectId) {
+  const nums = tabs.filter((t) => t.projectId === projectId).map((t) => t.num || 1)
+  return (nums.length ? Math.max.apply(null, nums) : 0) + 1
+}
+function sessionTitleForTab(tab) {
+  const base = GHOSTWRITER_TITLE + ' · ' + (tab.title || 'Untitled')
+  return (tab.num && tab.num > 1) ? base + ' · ' + tab.num : base
+}
+async function getSessionByTitle(title) {
+  try {
+    const list = await host.request('session.list', { title, limit: 200, include_hidden: true })
+    const sessions = (list && list.sessions) || []
+    const existing = sessions.find((s) => (s.root_title || s.title || '') === title)
+    if (existing) return existing
+  } catch (_) {}
+  return host.request('session.create', { title })
+}
+
+function projectContextBlock(project) {
+  const scenes = (project && Array.isArray(project.scenes)) ? project.scenes : []
+  const lines = scenes.map((s, i) =>
+    '  ' + (i + 1) + '. ' + (s.heading || '(untitled)') + ' [scene id: ' + (s.id || '') + ']')
+  return [
+    '[Ghostwriter context — you are working on the screenplay project below. Use the ghost_* tools with this project_id and stay on this project.]',
+    'Project id: ' + (project.id || ''),
+    'Project title: ' + (project.title || ''),
+    'Current scenes (' + scenes.length + '):',
+    lines.length ? lines.join('\n') : '  (none yet)',
+    '[/Ghostwriter context]',
+  ].join('\n')
+}
+function stripProjectContext(text) {
+  if (typeof text !== 'string') return text
+  const marker = '[/Ghostwriter context]'
+  const end = text.indexOf(marker)
+  if (end === -1) return text
+  return text.slice(end + marker.length).replace(/^\s+/, '')
+}
+
+function loadChatTabs(projects, currentPid) {
+  let stored = []
+  try {
+    const raw = (typeof localStorage !== 'undefined') && localStorage.getItem(CHAT_TABS_KEY)
+    if (raw) { const a = JSON.parse(raw); if (Array.isArray(a)) stored = a }
+  } catch (_) {}
+  const list = Array.isArray(projects) ? projects : []
+  const tabs = []
+  stored.forEach((s) => {
+    if (!s || typeof s !== 'object') return
+    const p = list.find((x) => x.id === s.projectId)
+    if (!p) return
+    tabs.push({ id: (s.id && typeof s.id === 'string') ? s.id : newTabId(), projectId: s.projectId, num: s.num || 1, title: p.title || '' })
+  })
+  if (currentPid && !tabs.some((t) => t.projectId === currentPid)) {
+    const cur = list.find((p) => p.id === currentPid)
+    tabs.unshift({ id: newTabId(), projectId: currentPid, num: 1, title: cur ? cur.title : '' })
+  }
+  if (!tabs.length && currentPid) tabs.push({ id: newTabId(), projectId: currentPid, num: 1, title: '' })
+  return tabs
+}
+function saveChatTabs(tabs) {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(CHAT_TABS_KEY, JSON.stringify(tabs.map((t) => ({ id: t.id, projectId: t.projectId, num: t.num }))))
+    }
+  } catch (_) {}
+}
+
+function loadChatWidth() {
+  try {
+    const raw = (typeof localStorage !== 'undefined') && localStorage.getItem(CHAT_WIDTH_KEY)
+    const n = raw ? parseInt(raw, 10) : NaN
+    if (n >= 280 && n <= 1200) return n
+  } catch (_) {}
+  return 380
+}
+function saveChatWidth(w) {
+  try { if (typeof localStorage !== 'undefined') localStorage.setItem(CHAT_WIDTH_KEY, String(w)) } catch (_) {}
+}
+
+function GwChat({ project, sessionTitle }) {
   const [sid, setSid] = useState(null)
-  const [messages, setMessages] = useState([]) // { role, text }[]
+  const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [streamText, setStreamText] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -1752,35 +1760,34 @@ function GwChat({ projectTitle, onClose }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const listRef = useRef(null)
-  const streamRef = useRef('')     // in-progress assistant text (read on complete)
-  const turnActive = useRef(false) // true between message.start and message.complete
+  const streamRef = useRef('')
+  const turnActive = useRef(false)
 
-  // Resolve the shared Ghostwriter session and load its transcript.
   useEffect(() => {
     let alive = true
+    setSid(null); setMessages([]); setError(null)
     ;(async () => {
       try {
-        const s = await getGhostwriterSession()
+        const s = await getSessionByTitle(sessionTitle)
         if (!alive || !s) return
-        // Adopted rows carry the compression-lineage tip as resolved_id; a fresh
-        // create reports stored_session_id. Bare id is the fallback.
         const id = s.resolved_id || s.stored_session_id || s.id || s.session_id
         if (!alive || !id) return
         setSid(id)
         const h = await host.request('session.history', { session_id: id })
         if (!alive) return
         const msgs = (h && Array.isArray(h.messages))
-          ? h.messages.map((m) => ({ role: m.role, text: m.text || '' })).filter((m) => m.text)
+          ? h.messages.map((m) => ({ role: m.role, text: m.text || '' }))
+            .map((m) => ({ role: m.role, text: (m.role === 'user') ? stripProjectContext(m.text) : m.text }))
+            .filter((m) => m.text)
           : []
         setMessages(msgs)
       } catch (e) {
-        if (alive) setError(`Chat unavailable: ${errInfo(e).text}`)
+        if (alive) setError('Chat unavailable: ' + errInfo(e).text)
       }
     })()
     return () => { alive = false }
-  }, [])
+  }, [sessionTitle])
 
-  // Stream the live reply for THIS session only.
   useEffect(() => {
     if (!sid) return
     const onStart = (ev) => {
@@ -1798,7 +1805,6 @@ function GwChat({ projectTitle, onClose }) {
       if (ev.session_id !== sid) return
       const p = ev.payload || {}
       turnActive.current = false
-      // Prefer the gateway's authoritative final text; fall back to what streamed.
       const finalText = (typeof p.text === 'string' && p.text) ? p.text : streamRef.current
       streamRef.current = ''
       setStreamText(''); setStreaming(false); setWaiting(false); setBusy(false)
@@ -1812,7 +1818,6 @@ function GwChat({ projectTitle, onClose }) {
     return () => { if (d1) d1(); if (d2) d2(); if (d3) d3() }
   }, [sid])
 
-  // Keep the newest message in view.
   useEffect(() => {
     const el = listRef.current
     if (el) el.scrollTop = el.scrollHeight
@@ -1824,23 +1829,16 @@ function GwChat({ projectTitle, onClose }) {
     setBusy(true); setWaiting(true); setInput(''); setError(null)
     setMessages((m) => [...m, { role: 'user', text }])
     try {
-      await host.request('prompt.submit', { session_id: sid, text })
+      await host.request('prompt.submit', { session_id: sid, text: projectContextBlock(project) + '\n' + text })
     } catch (e) {
       setBusy(false); setWaiting(false); setStreaming(false)
-      setError(`Send failed: ${errInfo(e).text}`)
+      setError('Send failed: ' + errInfo(e).text)
     }
   }
 
   const live = waiting || streaming || streamText
   const empty = messages.length === 0 && !live
   return jsxs('div', { className: 'gw-chat', children: [
-    jsxs('div', { className: 'gw-chat-head', children: [
-      jsxs('div', { className: 'gw-chat-title', children: [
-        '💬 Ghostwriter',
-        projectTitle ? jsx('span', { className: 'gw-chat-proj', children: ' · ' + projectTitle }) : null
-      ] }),
-      jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-ghost gw-chat-close', title: 'Close chat', onClick: onClose, children: '✕' })
-    ] }),
     jsx('div', { className: 'gw-chat-list', ref: listRef, children:
       empty
         ? jsx('div', { className: 'gw-chat-empty', children: 'Say something — e.g. “write a cold open for scene 1” or “tighten the dialogue in the café scene.”' })
@@ -1865,10 +1863,167 @@ function GwChat({ projectTitle, onClose }) {
   ] })
 }
 
+function GwChatRail({ projects, currentPid, currentData, onClose }) {
+  const [tabs, setTabs] = useState(() => loadChatTabs(projects, currentPid))
+  const [activeKey, setActiveKey] = useState(() => {
+    const t = loadChatTabs(projects, currentPid)
+    return (t[0] && t[0].id) || null
+  })
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [projData, setProjData] = useState({})
+  const prevPidRef = useRef(currentPid)
+  const addWrapRef = useRef(null)
+
+  useEffect(() => { saveChatTabs(tabs) }, [tabs])
+
+  // Reconcile tabs with the live project list: drop tabs whose project is gone,
+  // and make sure the current project always has a tab (the chat follows it).
+  useEffect(() => {
+    if (!Array.isArray(projects)) return
+    setTabs((prev) => {
+      const valid = prev.filter((t) => projects.some((p) => p.id === t.projectId))
+      if (currentPid && !valid.some((t) => t.projectId === currentPid)) {
+        const cur = projects.find((p) => p.id === currentPid)
+        valid.push({ id: newTabId(), projectId: currentPid, num: 1, title: cur ? cur.title : '' })
+      }
+      const same = valid.length === prev.length && valid.every((t, i) => t.id === prev[i].id)
+      return same ? prev : valid
+    })
+  }, [projects, currentPid])
+
+  // Follow the main project switch: jump to that project's first tab.
+  useEffect(() => {
+    if (currentPid && currentPid !== prevPidRef.current) {
+      const first = tabs.find((t) => t.projectId === currentPid)
+      if (first) setActiveKey(first.id)
+    }
+    prevPidRef.current = currentPid
+  }, [currentPid, tabs])
+
+  // Keep activeKey pointing at a real tab.
+  useEffect(() => {
+    if (!tabs.length) { if (activeKey !== null) setActiveKey(null); return }
+    if (!activeKey || !tabs.some((t) => t.id === activeKey)) setActiveKey(tabs[0].id)
+  }, [tabs, activeKey])
+
+  // Close the "＋" menu on an outside click.
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDocClick = (ev) => {
+      if (addWrapRef.current && !addWrapRef.current.contains(ev.target)) setMenuOpen(false)
+    }
+    document.addEventListener('click', onDocClick)
+    return () => document.removeEventListener('click', onDocClick)
+  }, [menuOpen])
+
+  // Resolve each open tab's project data (current project uses live page data;
+  // others are fetched once and cached) so every tab can anchor its prompts.
+  // Background tabs keep this data while hidden so they stay fully functional.
+  useEffect(() => {
+    const needed = Array.from(new Set(tabs.map((t) => t.projectId)))
+    needed.forEach((pid2) => {
+      if (pid2 === currentPid) {
+        if (currentData) {
+          const scenes = (currentData.active_revision && Array.isArray(currentData.active_revision.scenes)) ? currentData.active_revision.scenes : []
+          const title = (currentData.project && currentData.project.title) || ''
+          setProjData((pd) => (pd[pid2] && pd[pid2].scenes === scenes && pd[pid2].title === title) ? pd : { ...pd, [pid2]: { id: pid2, title, scenes } })
+        }
+        return
+      }
+      if (projData[pid2]) return
+      ;(async () => {
+        try {
+          const p = await api('/projects/' + encodeURIComponent(pid2))
+          const scenes = (p && p.active_revision && Array.isArray(p.active_revision.scenes)) ? p.active_revision.scenes : []
+          setProjData((pd) => ({ ...pd, [pid2]: { id: pid2, title: (p && p.title) || '', scenes } }))
+        } catch (_) { /* leave unresolved; the tab renders once data lands */ }
+      })()
+    })
+  }, [tabs, currentPid, currentData, projData])
+
+  // Add a brand-new chat tab for a project (a 2nd+ tab on the same project).
+  function newChatForProject(projectId) {
+    const num = nextNumForProject(tabs, projectId)
+    const title = ((projects.find((p) => p.id === projectId) || {}).title) || ''
+    const tab = { id: newTabId(), projectId, num, title }
+    setTabs((prev) => prev.some((t) => t.id === tab.id) ? prev : [...prev, tab])
+    setActiveKey(tab.id)
+    setMenuOpen(false)
+  }
+  // Open a chat for a project: activate an existing tab for it, else create one.
+  function openProjectTab(projectId) {
+    const existing = tabs.find((t) => t.projectId === projectId)
+    if (existing) { setActiveKey(existing.id); setMenuOpen(false); return }
+    newChatForProject(projectId)
+  }
+  function closeTab(id) {
+    const idx = tabs.findIndex((t) => t.id === id)
+    const next = tabs.filter((t) => t.id !== id)
+    setTabs(next)
+    if (activeKey === id) {
+      const fallback = next[idx] || next[idx - 1] || next[0] || null
+      setActiveKey(fallback ? fallback.id : null)
+    }
+    if (next.length === 0) onClose()
+  }
+
+  const allProjects = Array.isArray(projects) ? projects : []
+  const activeTab = tabs.find((t) => t.id === activeKey) || null
+  const activeProjectId = activeTab ? activeTab.projectId : null
+
+  return jsxs('div', { className: 'gw-rail', children: [
+    jsxs('div', { className: 'gw-rail-head', children: [
+      jsx('div', { className: 'gw-tabs', children: tabs.map((t) => jsxs('div', {
+        className: 'gw-tab' + (t.id === activeKey ? ' gw-tab-active' : ''),
+        key: t.id, onClick: () => setActiveKey(t.id), title: sessionTitleForTab(t),
+        children: [
+          jsx('span', { className: 'gw-tab-title', children: (t.title || 'Untitled') + (t.num > 1 ? ' · ' + t.num : '') }),
+          jsx('button', {
+            className: 'gw-tab-x', title: 'Close this chat',
+            onClick: (e) => { e.stopPropagation(); closeTab(t.id) }, children: '×'
+          }),
+        ]
+      })) }),
+      jsxs('div', { className: 'gw-add-wrap', ref: addWrapRef, children: [
+        jsx('button', { className: 'gw-add-btn', title: 'New chat',
+          onClick: (e) => { e.stopPropagation(); setMenuOpen((v) => !v) }, children: '＋' }),
+        menuOpen ? jsxs('div', { className: 'gw-add-menu', children: [
+          activeTab ? jsx('button', { className: 'gw-add-item gw-add-item-primary',
+            onClick: () => newChatForProject(activeTab.projectId),
+            children: jsx('span', { className: 'gw-add-label', children: 'New chat · ' + (activeTab.title || 'Untitled') }) }) : null,
+          (activeTab && allProjects.length) ? jsx('div', { className: 'gw-add-sep' }) : null,
+          allProjects.map((p) => {
+            const openCount = tabs.filter((t) => t.projectId === p.id).length
+            return jsx('button', { className: 'gw-add-item', key: p.id,
+              onClick: () => openProjectTab(p.id),
+              children: [
+                (p.id === activeProjectId) ? jsx('span', { className: 'gw-add-dot' }) : null,
+                jsx('span', { className: 'gw-add-label', children: (p.title || 'Untitled') + (openCount > 1 ? '  (' + openCount + ')' : '') })
+              ] })
+          })
+        ] }) : null,
+      ] }),
+      jsx('button', { className: 'gw-close-btn', title: 'Close chat', onClick: onClose, children: '✕' }),
+    ] }),
+    // Every tab's chat stays mounted (hidden when not active) so a background
+    // chat keeps streaming while you work in another.
+    tabs.map((t) => {
+      const pd = projData[t.projectId]
+      if (!pd) return null
+      return jsx('div', {
+        key: t.id,
+        style: { display: (t.id === activeKey) ? 'flex' : 'none', flexDirection: 'column', flex: '1 1 0%', minHeight: 0 },
+        children: jsx(GwChat, { project: pd, sessionTitle: sessionTitleForTab(t) })
+      })
+    }),
+    !tabs.length ? jsx('div', { className: 'gw-chat-empty', style: { padding: 16 }, children: 'No project selected.' }) : null,
+  ] })
+}
+
 export default {
   id: ID,
   name: 'Ghostwriter',
-  description: 'Ghostwriter: a local writing workspace for screenplays and prose — parse, revise, propose, validate, and export PDF/Markdown.',
+  description: 'Ghostwriter: a local writing workspace for screenplays — parse, revise, propose, validate, and export PDF.',
   defaultEnabled: true,
   register(ctx) {
     const style = document.createElement('style')
