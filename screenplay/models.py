@@ -3,8 +3,7 @@
 In-memory dataclasses mirroring the persistent entities. The repository layer
 serializes these to/from SQLite; the service layer orchestrates them.
 
-The data model is defined by the product specification (IMPLEMENTATION_PLAN.md,
-"Data and revision model"). Revisions are immutable complete Fountain snapshots;
+Revisions are immutable complete Fountain snapshots;
 scene identity is a stable opaque id that survives a scene's replacement, and
 ``order`` is display data, not identity.
 """
@@ -12,11 +11,10 @@ scene identity is a stable opaque id that survives a scene's replacement, and
 from __future__ import annotations
 
 import hashlib
-import json
 import time
 import uuid
-from dataclasses import dataclass, field, asdict
-from typing import Any, List, Optional
+from dataclasses import dataclass, field
+from typing import List, Optional
 
 # Hermes version this plugin is built and tested against (v0.22.7, 2026.9.24).
 # Single source of truth: both the agent tools and the dashboard report this.
@@ -48,10 +46,6 @@ ORIGIN_RESTORE = "restore"
 # ExportStatus
 EXPORT_OK = "ok"
 EXPORT_FAILED = "failed"
-
-# FindingStatus (optional continuity notes)
-FINDING_OPEN = "open"
-FINDING_RESOLVED = "resolved"
 
 # Structured error codes (returned by the service and surfaced by tools/routes).
 ERR_PROJECT_NOT_FOUND = "PROJECT_NOT_FOUND"
@@ -133,11 +127,7 @@ class Project:
     id: str
     title: str
     author: str
-    # The document format this project uses (which engine parses/validates/
-    # renders it). Phase 0: always "screenplay". This field is in-memory for
-    # now -- per-project persistence (a projects.format column) arrives in
-    # Phase 1 alongside the first non-screenplay engine, when a second format
-    # actually needs to be remembered per project.
+    # The document format (which engine parses/validates/renders it).
     format: str = "screenplay"
     active_revision_id: Optional[str] = None
     active_rules_id: Optional[str] = None
@@ -251,14 +241,15 @@ class Check:
 
 @dataclass
 class Operation:
-    """One proposed edit: an insertion or a scene replacement.
+    """One proposed edit to the scene list.
 
-    type == "insert":  new scene; ``before_scene_id`` places it before that scene
-                       (None = append at end). ``heading`` + ``content`` define it.
-    type == "replace": ``scene_id`` names the target; ``heading`` + ``content`` are
-                       the new scene (replacing the target's body).
+    type == "insert":  new scene(s); ``before_scene_id`` places it before that
+                       scene (None = append). ``heading`` + ``content`` define it.
+    type == "replace": ``scene_id`` names the target; ``heading`` + ``content``
+                       are the new scene text (content may hold extra scenes).
+    type == "delete":  removes the scene ``scene_id``.
     """
-    type: str                 # "insert" | "replace"
+    type: str                 # "insert" | "replace" | "delete"
     scene_id: Optional[str] = None
     before_scene_id: Optional[str] = None
     heading: str = ""
@@ -338,28 +329,6 @@ class Export:
             "renderer_config": self.renderer_config,
             "artifact_path": self.artifact_path,
             "page_count": self.page_count,
-            "status": self.status,
-            "created_at": self.created_at,
-        }
-
-
-@dataclass
-class Finding:
-    id: str
-    project_id: str
-    revision_id: str
-    evidence: List[dict]     # [{scene_id, offset_in_scene, length, quote}]
-    observation: str
-    status: str = FINDING_OPEN
-    created_at: str = field(default_factory=_now_iso)
-
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "project_id": self.project_id,
-            "revision_id": self.revision_id,
-            "evidence": self.evidence,
-            "observation": self.observation,
             "status": self.status,
             "created_at": self.created_at,
         }

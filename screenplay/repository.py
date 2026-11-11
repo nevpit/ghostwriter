@@ -1,11 +1,12 @@
-"""SQLite persistence for the screenplay service.
+"""SQLite persistence for the ghostwriter service.
 
 Path-injectable so it is testable headless (``Repository(tmp_path/"t.db")``);
 production resolves the real path via ``plugin_data_dir("ghostwriter")``.
 
-WAL mode + a re-entrant lock give safe concurrent reads and serialized writes
-within one process. Each profile has its own data dir, so cross-profile
-isolation is structural.
+The agent process and the desktop web-server process each open their own
+connection to the same file: WAL mode plus a busy timeout make that safe.
+Within a process every statement runs under one re-entrant lock, because a
+``sqlite3`` connection must not be used by two threads at once.
 """
 
 from __future__ import annotations
@@ -15,11 +16,10 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
-from . import models as M
-from . import fountain
 from . import formats
+from . import models as M
 
 MIGRATIONS = [
     "0001_initial.sql",
@@ -27,8 +27,6 @@ MIGRATIONS = [
     "0003_format.sql",
 ]
 
-# Resolved from this file so migrations load regardless of how the package is
-# imported (top-level in tests, nested as <plugin>.screenplay in the loader).
 _MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
 
@@ -37,42 +35,27 @@ class Repository:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=15.0)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA foreign_keys=ON;")
-        # Per-repo engine registry: get_revision re-derives a revision's block
-        # elements via the owning project's format engine (screenplay by default).
+        self._conn.execute("PRAGMA busy_timeout=15000;")
         self._registry = registry or formats.build_default_registry()
         self._migrate()
 
-    # --- lifecycle ----------------------------------------------------------
+    # --- low-level helpers --------------------------------------------------
 
-    def _migrate(self) -> None:
-        # Version-aware: apply each migration at most once. 0001 creates the
-        # ``meta`` table, so a fresh DB has no version yet (treated as 0) and the
-        # whole chain runs; a v2/v3 DB skips what it already applied. This makes
-        # the runner safe for both brand-new and previously-migrated databases.
-        for name in MIGRATIONS:
-            version = int(name.split("_", 1)[0])
-            if version <= self._current_version():
-                continue
-            sql = (_MIGRATIONS_DIR / name).read_text(encoding="utf-8")
-            with self._lock, self._conn:
-                self._conn.executescript(sql)
-
-    def _current_version(self) -> int:
-        """Schema version recorded in ``meta`` (0 on a fresh DB, before 0001)."""
-        try:
-            row = self._conn.execute(
-                "SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        except sqlite3.OperationalError:
-            return 0  # meta table doesn't exist yet
-        return int(row["value"]) if row else 0
-
-    def close(self) -> None:
+    def _all(self, sql: str, params=()) -> list:
         with self._lock:
-            self._conn.close()
+            return self._conn.execute(sql, params).fetchall()
+
+    def _one(self, sql: str, params=()):
+        with self._lock:
+            return self._conn.execute(sql, params).fetchone()
+
+    def _write(self, sql: str, params=()) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(sql, params)
 
     @contextmanager
     def transaction(self):
@@ -85,34 +68,48 @@ class Repository:
                 self._conn.rollback()
                 raise
 
+    # --- lifecycle ----------------------------------------------------------
+
+    def _migrate(self) -> None:
+        for name in MIGRATIONS:
+            version = int(name.split("_", 1)[0])
+            if version <= self._current_version():
+                continue
+            sql = (_MIGRATIONS_DIR / name).read_text(encoding="utf-8")
+            with self._lock, self._conn:
+                self._conn.executescript(sql)
+
+    def _current_version(self) -> int:
+        try:
+            row = self._one("SELECT value FROM meta WHERE key='schema_version'")
+        except sqlite3.OperationalError:
+            return 0
+        return int(row["value"]) if row else 0
+
     @property
     def schema_version(self) -> str:
-        row = self._conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        return row["value"] if row else "0"
+        return str(self._current_version())
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
 
     # --- projects -----------------------------------------------------------
 
     def create_project(self, p: M.Project) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "INSERT INTO projects (id,title,author,format,active_revision_id,"
-                "active_rules_id,renderer_config,created_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
-                (p.id, p.title, p.author, p.format, p.active_revision_id, p.active_rules_id,
-                 json.dumps(p.renderer_config), p.created_at, p.updated_at),
-            )
+        self._write(
+            "INSERT INTO projects (id,title,author,format,active_revision_id,"
+            "active_rules_id,renderer_config,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (p.id, p.title, p.author, p.format, p.active_revision_id, p.active_rules_id,
+             json.dumps(p.renderer_config), p.created_at, p.updated_at))
 
     def get_project(self, project_id: str) -> Optional[M.Project]:
-        row = self._conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
-        if not row:
-            return None
-        return self._row_to_project(row)
+        row = self._one("SELECT * FROM projects WHERE id=?", (project_id,))
+        return self._row_to_project(row) if row else None
 
-    def list_projects(self) -> list[M.Project]:
-        rows = self._conn.execute(
-            "SELECT * FROM projects ORDER BY updated_at DESC"
-        ).fetchall()
-        return [self._row_to_project(r) for r in rows]
+    def list_projects(self) -> List[M.Project]:
+        return [self._row_to_project(r)
+                for r in self._all("SELECT * FROM projects ORDER BY updated_at DESC")]
 
     def touch_project(self, project_id: str, **fields) -> None:
         allowed = {"title", "author", "format", "active_revision_id",
@@ -120,18 +117,21 @@ class Repository:
         sets, vals = [], []
         for k, v in fields.items():
             if k in allowed:
-                if k == "renderer_config":
-                    v = json.dumps(v)
                 sets.append(f"{k}=?")
-                vals.append(v)
+                vals.append(json.dumps(v) if k == "renderer_config" else v)
         if sets:
             vals.append(project_id)
-            with self._lock, self._conn:
-                self._conn.execute(
-                    f"UPDATE projects SET {', '.join(sets)} WHERE id=?", vals
-                )
+            self._write(f"UPDATE projects SET {', '.join(sets)} WHERE id=?", vals)
 
-    def _row_to_project(self, row) -> M.Project:
+    def delete_project(self, project_id: str) -> None:
+        """Delete a project and (via ON DELETE CASCADE) all of its data."""
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM scenes WHERE revision_id IN "
+                         "(SELECT id FROM revisions WHERE project_id=?)", (project_id,))
+            conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
+
+    @staticmethod
+    def _row_to_project(row) -> M.Project:
         return M.Project(
             id=row["id"], title=row["title"], author=row["author"],
             format=row["format"] or "screenplay",
@@ -143,18 +143,26 @@ class Repository:
 
     # --- revisions ----------------------------------------------------------
 
+    @staticmethod
+    def insert_revision(conn, r: M.Revision) -> None:
+        """Insert a revision + its scene index using ``conn`` (no commit), so
+        callers can make it part of a larger transaction."""
+        conn.execute(
+            "INSERT INTO revisions (id,project_id,parent_id,snapshot,content_hash,"
+            "origin,created_at) VALUES (?,?,?,?,?,?,?)",
+            (r.id, r.project_id, r.parent_id, r.snapshot, r.content_hash, r.origin, r.created_at))
+        conn.executemany(
+            "INSERT INTO scenes (revision_id,id,scene_order,heading,start_offset,end_offset,"
+            "parse_ok) VALUES (?,?,?,?,?,?,?)",
+            [(r.id, s.id, s.order, s.heading, s.start, s.end, 1 if s.parse_ok else 0)
+             for s in r.scenes])
+
     def create_revision(self, r: M.Revision) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "INSERT INTO revisions (id,project_id,parent_id,snapshot,content_hash,"
-                "origin,created_at) VALUES (?,?,?,?,?,?,?)",
-                (r.id, r.project_id, r.parent_id, r.snapshot, r.content_hash,
-                 r.origin, r.created_at),
-            )
-            self._save_scenes(r)
+        with self.transaction() as conn:
+            self.insert_revision(conn, r)
 
     def get_revision(self, revision_id: str) -> Optional[M.Revision]:
-        row = self._conn.execute("SELECT * FROM revisions WHERE id=?", (revision_id,)).fetchone()
+        row = self._one("SELECT * FROM revisions WHERE id=?", (revision_id,))
         if not row:
             return None
         rev = M.Revision(
@@ -163,142 +171,95 @@ class Repository:
             origin=row["origin"], created_at=row["created_at"],
         )
         rev.scenes = self._load_scenes(revision_id)
-        # Elements are derived from the immutable snapshot (source of truth). The
-        # snapshot is re-parsed with the *owning project's* format engine (not
-        # hardcoded to Fountain) so non-screenplay projects round-trip too; the
-        # result is aligned onto the stored blocks by document order. Stored
-        # ids/order/heading are authoritative; the fresh parse supplies the
-        # per-block elements/kind/parent_id/meta.
-        parsed = self._parse_snapshot(rev)
+        # Elements are derived from the immutable snapshot (the source of truth);
+        # stored ids/order/offsets are authoritative and the fresh parse supplies
+        # each scene's elements. Parsing is memoized by snapshot.
+        parsed = self._engine_for(rev.project_id).parse(rev.snapshot)[0]
         for i, sc in enumerate(rev.scenes):
             if i < len(parsed):
                 sc.elements = parsed[i].elements
-                sc.kind = parsed[i].kind
-                sc.parent_id = parsed[i].parent_id
                 sc.meta = parsed[i].meta
         return rev
 
-    def _parse_snapshot(self, rev: M.Revision) -> list:
-        """Re-derive a revision's blocks by parsing its snapshot with the owning
-        project's format engine. Falls back to the screenplay engine if the
-        project or its format is unknown (defensive)."""
-        project = self.get_project(rev.project_id)
-        fmt = project.format if project else "screenplay"
+    def _engine_for(self, project_id: str):
+        project = self.get_project(project_id)
         try:
-            eng = self._registry.get(fmt)
-        except Exception:
-            eng = self._registry.get("screenplay")
-        blocks, _problems = eng.parse(rev.snapshot)
-        return list(blocks)
+            return self._registry.get(project.format if project else "screenplay")
+        except KeyError:
+            return self._registry.get("screenplay")
 
-    def list_revisions(self, project_id: str) -> list[M.Revision]:
-        rows = self._conn.execute(
-            "SELECT id FROM revisions WHERE project_id=? ORDER BY created_at",
-            (project_id,),
-        ).fetchall()
-        return [self.get_revision(r["id"]) for r in rows]
+    def revision_headers(self, project_id: str) -> List[dict]:
+        """Cheap history listing (no snapshot parsing), oldest first."""
+        rows = self._all(
+            "SELECT r.id, r.parent_id, r.origin, r.content_hash, r.created_at, "
+            "(SELECT COUNT(*) FROM scenes s WHERE s.revision_id = r.id) AS scene_count "
+            "FROM revisions r WHERE r.project_id=? ORDER BY r.created_at, r.rowid",
+            (project_id,))
+        return [dict(r) for r in rows]
 
-    def find_revision_by_hash(self, project_id: str, content_hash: str) -> Optional[str]:
-        row = self._conn.execute(
-            "SELECT id FROM revisions WHERE project_id=? AND content_hash=?",
-            (project_id, content_hash),
-        ).fetchone()
-        return row["id"] if row else None
+    def list_revisions(self, project_id: str) -> List[M.Revision]:
+        return [self.get_revision(h["id"]) for h in self.revision_headers(project_id)]
 
-    def _save_scenes(self, rev: M.Revision) -> None:
-        self._conn.execute("DELETE FROM scenes WHERE revision_id=?", (rev.id,))
-        for s in rev.scenes:
-            self._conn.execute(
-                "INSERT INTO scenes (revision_id,id,scene_order,heading,start_offset,end_offset,"
-                "parse_ok) VALUES (?,?,?,?,?,?,?)",
-                (rev.id, s.id, s.order, s.heading, s.start, s.end, 1 if s.parse_ok else 0),
-            )
-
-    def _load_scenes(self, revision_id: str) -> list[M.Scene]:
-        rows = self._conn.execute(
-            "SELECT * FROM scenes WHERE revision_id=? ORDER BY scene_order", (revision_id,)
-        ).fetchall()
-        return [
-            M.Scene(
-                id=r["id"], order=r["scene_order"], kind="scene", heading=r["heading"],
-                start=r["start_offset"], end=r["end_offset"],
-                parse_ok=bool(r["parse_ok"]),
-            )
-            for r in rows
-        ]
+    def _load_scenes(self, revision_id: str) -> List[M.Scene]:
+        rows = self._all("SELECT * FROM scenes WHERE revision_id=? ORDER BY scene_order",
+                         (revision_id,))
+        return [M.Scene(id=r["id"], order=r["scene_order"], kind="scene", heading=r["heading"],
+                        start=r["start_offset"], end=r["end_offset"], parse_ok=bool(r["parse_ok"]))
+                for r in rows]
 
     # --- rules --------------------------------------------------------------
 
     def create_rules(self, rv: M.RulesVersion) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "INSERT INTO rules_versions (id,project_id,parent_id,body,created_at) "
-                "VALUES (?,?,?,?,?)",
-                (rv.id, rv.project_id, rv.parent_id, json.dumps(rv.to_dict()), rv.created_at),
-            )
+        self._write(
+            "INSERT INTO rules_versions (id,project_id,parent_id,body,created_at) VALUES (?,?,?,?,?)",
+            (rv.id, rv.project_id, rv.parent_id, json.dumps(rv.to_dict()), rv.created_at))
 
-    def get_rules(self, rules_id: str) -> Optional[M.RulesVersion]:
-        row = self._conn.execute(
-            "SELECT * FROM rules_versions WHERE id=?", (rules_id,)
-        ).fetchone()
+    def get_rules(self, rules_id: Optional[str]) -> Optional[M.RulesVersion]:
+        if not rules_id:
+            return None
+        row = self._one("SELECT * FROM rules_versions WHERE id=?", (rules_id,))
         if not row:
             return None
         return M.RulesVersion.from_dict(
             json.loads(row["body"]), id=row["id"], project_id=row["project_id"],
-            parent_id=row["parent_id"], created_at=row["created_at"],
-        )
-
-    def list_rules(self, project_id: str) -> list[M.RulesVersion]:
-        rows = self._conn.execute(
-            "SELECT id,project_id,parent_id,created_at FROM rules_versions "
-            "WHERE project_id=? ORDER BY created_at", (project_id,),
-        ).fetchall()
-        return [self.get_rules(r["id"]) for r in rows]
+            parent_id=row["parent_id"], created_at=row["created_at"])
 
     # --- proposals ----------------------------------------------------------
 
     def create_proposal(self, p: M.Proposal) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "INSERT INTO proposals (id,project_id,base_revision_id,rules_id,operations,"
-                "candidate_snapshot,candidate_hash,checks,diff,status,idempotency_key,"
-                "created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (p.id, p.project_id, p.base_revision_id, p.rules_id,
-                 json.dumps([o.to_dict() for o in p.operations]),
-                 p.candidate_snapshot, p.candidate_hash, json.dumps([c.to_dict() for c in p.checks]),
-                 json.dumps(p.diff), p.status, p.idempotency_key, p.created_at, p.updated_at),
-            )
+        self._write(
+            "INSERT INTO proposals (id,project_id,base_revision_id,rules_id,operations,"
+            "candidate_snapshot,candidate_hash,checks,diff,status,idempotency_key,"
+            "created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (p.id, p.project_id, p.base_revision_id, p.rules_id,
+             json.dumps([o.to_dict() for o in p.operations]),
+             p.candidate_snapshot, p.candidate_hash, json.dumps([c.to_dict() for c in p.checks]),
+             json.dumps(p.diff), p.status, p.idempotency_key, p.created_at, p.updated_at))
 
     def get_proposal(self, proposal_id: str) -> Optional[M.Proposal]:
-        row = self._conn.execute(
-            "SELECT * FROM proposals WHERE id=?", (proposal_id,)
-        ).fetchone()
-        if not row:
-            return None
-        return self._row_to_proposal(row)
-
-    def list_proposals(self, project_id: str) -> list[M.Proposal]:
-        rows = self._conn.execute(
-            "SELECT * FROM proposals WHERE project_id=? ORDER BY created_at DESC",
-            (project_id,),
-        ).fetchall()
-        return [self._row_to_proposal(r) for r in rows]
-
-    def set_proposal_status(self, proposal_id: str, status: str) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "UPDATE proposals SET status=?, updated_at=? WHERE id=?",
-                (status, M._now_iso(), proposal_id),
-            )
-
-    def find_proposal_by_idem(self, project_id: str, key: str) -> Optional[M.Proposal]:
-        row = self._conn.execute(
-            "SELECT * FROM proposals WHERE project_id=? AND idempotency_key=?",
-            (project_id, key),
-        ).fetchone()
+        row = self._one("SELECT * FROM proposals WHERE id=?", (proposal_id,))
         return self._row_to_proposal(row) if row else None
 
-    def _row_to_proposal(self, row) -> M.Proposal:
+    def list_proposals(self, project_id: str) -> List[M.Proposal]:
+        return [self._row_to_proposal(r) for r in self._all(
+            "SELECT * FROM proposals WHERE project_id=? ORDER BY created_at DESC, rowid DESC",
+            (project_id,))]
+
+    def set_proposal_status(self, proposal_id: str, status: str) -> None:
+        self._write("UPDATE proposals SET status=?, updated_at=? WHERE id=?",
+                    (status, M._now_iso(), proposal_id))
+
+    def update_proposal_checks(self, proposal_id: str, checks: List[M.Check], status: str) -> None:
+        self._write("UPDATE proposals SET checks=?, status=?, updated_at=? WHERE id=?",
+                    (json.dumps([c.to_dict() for c in checks]), status, M._now_iso(), proposal_id))
+
+    def find_proposal_by_idem(self, project_id: str, key: str) -> Optional[M.Proposal]:
+        row = self._one("SELECT * FROM proposals WHERE project_id=? AND idempotency_key=?",
+                        (project_id, key))
+        return self._row_to_proposal(row) if row else None
+
+    @staticmethod
+    def _row_to_proposal(row) -> M.Proposal:
         return M.Proposal(
             id=row["id"], project_id=row["project_id"],
             base_revision_id=row["base_revision_id"], rules_id=row["rules_id"],
@@ -307,68 +268,13 @@ class Repository:
             checks=[M.Check(**d) for d in json.loads(row["checks"])],
             diff=json.loads(row["diff"]), status=row["status"],
             idempotency_key=row["idempotency_key"],
-            created_at=row["created_at"], updated_at=row["updated_at"],
-        )
+            created_at=row["created_at"], updated_at=row["updated_at"])
 
     # --- exports ------------------------------------------------------------
 
     def create_export(self, e: M.Export) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "INSERT INTO exports (id,project_id,revision_id,renderer_config,artifact_path,"
-                "page_count,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
-                (e.id, e.project_id, e.revision_id, json.dumps(e.renderer_config),
-                 e.artifact_path, e.page_count, e.status, e.created_at),
-            )
-
-    def get_export(self, export_id: str) -> Optional[M.Export]:
-        row = self._conn.execute("SELECT * FROM exports WHERE id=?", (export_id,)).fetchone()
-        if not row:
-            return None
-        return M.Export(
-            id=row["id"], project_id=row["project_id"], revision_id=row["revision_id"],
-            renderer_config=json.loads(row["renderer_config"] or "{}"),
-            artifact_path=row["artifact_path"], page_count=row["page_count"],
-            status=row["status"], created_at=row["created_at"],
-        )
-
-    def list_exports(self, project_id: str) -> list[M.Export]:
-        rows = self._conn.execute(
-            "SELECT * FROM exports WHERE project_id=? ORDER BY created_at DESC",
-            (project_id,),
-        ).fetchall()
-        return [self.get_export(r["id"]) for r in rows]
-
-    # --- findings -----------------------------------------------------------
-
-    def create_finding(self, f: M.Finding) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "INSERT INTO findings (id,project_id,revision_id,evidence,observation,"
-                "status,created_at) VALUES (?,?,?,?,?,?,?)",
-                (f.id, f.project_id, f.revision_id, json.dumps(f.evidence),
-                 f.observation, f.status, f.created_at),
-            )
-
-    def list_findings(self, project_id: str, status: Optional[str] = None) -> list[M.Finding]:
-        if status:
-            rows = self._conn.execute(
-                "SELECT * FROM findings WHERE project_id=? AND status=? ORDER BY created_at",
-                (project_id, status),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT * FROM findings WHERE project_id=? ORDER BY created_at", (project_id,)
-            ).fetchall()
-        return [
-            M.Finding(
-                id=r["id"], project_id=r["project_id"], revision_id=r["revision_id"],
-                evidence=json.loads(r["evidence"] or "[]"), observation=r["observation"],
-                status=r["status"], created_at=r["created_at"],
-            )
-            for r in rows
-        ]
-
-    def set_finding_status(self, finding_id: str, status: str) -> None:
-        with self._lock, self._conn:
-            self._conn.execute("UPDATE findings SET status=? WHERE id=?", (status, finding_id))
+        self._write(
+            "INSERT INTO exports (id,project_id,revision_id,renderer_config,artifact_path,"
+            "page_count,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (e.id, e.project_id, e.revision_id, json.dumps(e.renderer_config),
+             e.artifact_path, e.page_count, e.status, e.created_at))

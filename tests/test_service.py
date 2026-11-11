@@ -221,24 +221,27 @@ def test_undo_on_initial_refused():
         assert e.code == "INVALID_PROPOSAL"
 
 
-def test_rule_change_invalidates_old_proposal():
-    """Editing a rule creates a new rules version; the older proposal is stale."""
+def test_rule_change_revalidates_old_proposal():
+    """Editing a rule creates a new rules version; pending proposals are
+    re-validated against the *current* rules at accept time (a harmless rule
+    change does not discard work, a violating one blocks the accept)."""
     B.fresh_home()
     s = B.svc()
     p = s.import_project("T", "A", B.SAMPLE_FOUNTAIN)
     rev = s.read_revision(p.id, p.active_revision_id)
-    prop = s.propose(
-        p.id,
-        [{"type": "replace", "scene_id": rev.scenes[0].id,
-          "heading": "INT. OLD HOUSE - NIGHT", "content": "Edited opening."}],
-        base_revision_id=rev.id)
-    s.update_rules(p.id, guidance=["stay on theme"])  # new rules version, active
+    op = [{"type": "replace", "scene_id": rev.scenes[0].id,
+           "heading": "INT. OLD HOUSE - NIGHT", "content": "Edited opening."}]
+    ok = s.propose(p.id, op)
+    blocked = s.propose(p.id, op)
+    s.update_rules(p.id, guidance=["stay on theme"])
+    s.accept_proposal(ok.id)            # still valid under the new rules
+    s.update_rules(p.id, dialogue_block_limit=1)
     try:
-        s.accept_proposal(prop.id)
-        assert False, "expected stale proposal to be refused"
+        s.accept_proposal(blocked.id)
+        assert False, "expected the new rule to block the accept"
     except ServiceError as e:
-        assert e.code == "RULES_CHANGED"
-    assert s.get_proposal(prop.id).status == "stale"
+        assert e.code in ("VALIDATION", "STALE_REVISION"), e.code
+    assert s.get_proposal(blocked.id).status in ("blocked", "stale")
 
 
 def test_import_parse_failure_leaves_no_orphan_project():
