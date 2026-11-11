@@ -6,28 +6,11 @@ from .screenplay.tools import TOOLS
 
 
 def _skill_frontmatter(skill_md: Path) -> tuple:
-    """Return ``(frontmatter_dict, description)`` for a bundled ``SKILL.md``.
-
-    Uses Hermes' canonical frontmatter parser when importable, with a
-    lightweight manual fallback so the plugin still loads if the helper is
-    unavailable at register time.
-    """
-    try:
-        from agent.skill_utils import parse_frontmatter
-    except Exception:
-        parse_frontmatter = None
+    """Read the single-line frontmatter fields used by bundled skills."""
     try:
         raw = skill_md.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return {}, ""
-    if parse_frontmatter is not None:
-        try:
-            fm, _body = parse_frontmatter(raw)
-            if isinstance(fm, dict):
-                return fm, str(fm.get("description", ""))
-        except Exception:
-            pass
-    # Fallback: manual key: value parse of the first frontmatter block.
     lines = raw.splitlines()
     if not lines or lines[0].strip() != "---":
         return {}, ""

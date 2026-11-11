@@ -531,7 +531,7 @@ def _title_layout(fields: dict, order: List[str], s: RenderSettings) -> List[Tup
 # --- Text encoding ----------------------------------------------------------
 
 _FALLBACK = {"‐": "-", "‑": "-", "‒": "-", "―": "--",
-             "′": "'", "″": '"', " ": " ", " ": " ", "​": ""}
+             "′": "'", "″": '"', "\u00a0": " ", "\u2009": " ", "\u200b": ""}
 
 
 def _encode(text: str) -> bytes:
