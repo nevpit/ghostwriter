@@ -49,5 +49,8 @@ class ScreenplayEngine(DocumentEngine):
     def import_(self, filename: str, content: bytes) -> str:
         return importers.to_fountain(filename or "", content or b"")
 
+    def default_settings(self):
+        return rendering.RenderSettings()
+
     def export_formats(self) -> List[str]:
-        return ["fountain", "pdf"]
+        return ["fountain", "fdx", "pdf"]

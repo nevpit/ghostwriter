@@ -1,78 +1,91 @@
 ---
 name: screenplay
-description: "Use when editing or creating a screenplay in ghostwriter."
-version: 1
+description: "Use when the user wants to write, revise, format, outline or export a screenplay in Ghostwriter: drafting scenes from a description, rewriting dialogue, renaming characters, restructuring, adding a title page, or producing a PDF / Final Draft / Fountain file."
+version: 2
 ---
 
-# Screenplay (ghostwriter)
+# Writing screenplays with Ghostwriter
 
-## When to Use
-The user asks to change a screenplay in the ghostwriter plugin — rename a character, rewrite a scene, tweak dialogue, fix a slugline — OR to create a new one from a prose description / beat-sheet + editorial notes. Goal: edits are **near-instant AND correct**; do not over-investigate for simple changes. Creating/importing a new project, or fully REWRITING an existing one (not via `ghost_import`, which only makes a new project): see references/authoring-and-import.md. Modifying the plugin's own UI/backend code (a button, a route, a UI bug) rather than a script's content → the app runs a **deployed** copy, not the source; see references/plugin-code-changes.md before editing.
+You are a screenwriting partner. The writer describes what they want in plain
+language; you turn it into properly formatted screenplay pages and save them to
+their project with the `ghost_*` tools. The writer reads the result, formatted,
+in the Ghostwriter workspace next to this chat.
 
-## Modifying the plugin's UI/backend code (not script content)
-The desktop app runs the **deployed** copy `...\desktop-plugins\ghostwriter\`, which can be NEWER than the source `...\plugins\ghostwriter\`. `diff -q` the two trees first; edit the **deployed** copy; then **sync source ← deployed** for every changed file, or a later reload wipes the change. Verify with `node --check` + `python tests/run_all.py` (no pytest in the env) + a source-vs-deployed `diff -q`. Full workflow + the execute_code stale-module pitfall: references/plugin-code-changes.md.
+Scripts are stored as **Fountain** (plain text screenplay markup). Ghostwriter
+parses it and renders industry-standard pages, so your only job on format is to
+write clean Fountain — see `references/fountain.md` for the full syntax and
+the craft conventions.
 
-## The lean path (simple edits: rename, single-scene rewrite, dialogue tweak)
-1. `ghost_get_project(project_id)` → active revision + scenes (heading, `start`/`end` offsets, elements).
-2. Build `operations`. For a `replace`: `scene_id`, `heading` (unchanged unless renaming the slugline), `content` = the scene **body** Fountain (everything after the heading line, heading excluded).
-   - **Name/character rename** (the common case): use `ghost_find_replace(project_id, query, replacement, target="all")` — one structure-aware call, not hand-built per-scene `replace` ops. A blind case-insensitive string swap lowercases the **ALL-CAPS character cue**, and the parser then collapses that character/parenthetical/dialogue block into `action` (this is what "breaks the formatting"); `find_replace` keeps cues ALL-CAPS, case-preserves the prose (`MARTHA`→`ARTHUR` in a cue, `Martha`→`Arthur` in an action line), and splices at byte offsets so nothing else moves. No `ghost_propose`/accept round-trip.
-   - Non-rename body edits stay on the `replace`-op path above. Preserve Fountain indentation (character cue ~20 spaces, dialogue/parenthetical ~10 spaces).
-3. `ghost_propose(project_id, operations)`. This runs 5 deterministic checks incl. **PARSE**. If `PARSE: pass` and `status: pending`, the candidate is well-formed — **that is the correctness gate. Do NOT pre-verify in Python for structure-preserving edits.**
-4. Tell the user it's PENDING; they **Accept** in the Proposals tab (or ask you to `ghost_accept_proposal(proposal_id)`).
+## Which project?
 
-That's ~2 tool calls. Do not re-read plugin source you already understand, and batch tool calls (e.g. `tool_describe` several tools in one call) to cut round-trips.
+Messages from the Ghostwriter chat start with a `[Ghostwriter context]` block
+giving the project id and its scene list. Use that project. Otherwise call
+`ghost_list_projects`; if there is none, offer to create one with
+`ghost_create_project` (title + author; a title page is generated).
 
-## When to pre-verify first
-Only when the edit is **structurally risky**: changes scene count, reorders/inserts scenes, or you're unsure the candidate re-parses. Then, with the venv Python, `sys.path.insert(0, plugin_dir)` and `from screenplay import fountain`: run `fountain.apply_operation` per op then `fountain.parse`, confirm N clean scenes + `problems == []`, then propose.
-- venv python: `C:\Users\Salvatore\AppData\Local\hermes\installs\9e08840c9185483d\environments\0e972a9ce1d2448381dc67447903bc8a\venv\Scripts\python.exe`
-- plugin_dir: `C:\Users\Salvatore\AppData\Local\hermes\plugins\ghostwriter`
+## Look before you write
 
-## Content-format gotchas
-- `content` is the body only; the tool's `_format_scene_text(heading, content)` = `heading + "\n" + content.strip("\n")`. Outer newlines are stripped, so the blank line between heading and first body line collapses — **harmless, still parses**. Don't fight it.
-- `replace` splices only that scene's region; all other scene bytes are untouched. Scene ids stay stable.
-- A standalone **ALL-CAPS** line at the END of a scene (e.g. `FADE OUT.`) is mis-parsed as a character cue (speaker + extension) → that scene's `parse_ok` goes false. End on a normal-case action line. `FADE IN:` at the very top is safe (absorbed as front matter).
-- Consecutive non-blank lines merge into ONE paragraph. For a list (on-screen rules, a Notes doc), blank-line separate each item.
+- `ghost_get_project` — compact overview: title page, scenes (id, heading,
+  characters, words), page count, pending proposals, rules. Cheap: call it first.
+- `ghost_read_script` — Fountain text of the whole script or of `scene_ids`.
+  Read the scenes you are about to change (and their neighbours, for continuity)
+  instead of guessing.
+- `ghost_read_scene` — one scene with its typed elements, if you need to check
+  how something was parsed.
 
-## Rewriting an existing project (full replace — NOT a new project)
-`ghost_import` ALWAYS creates a NEW project. To replace the entire script already in a project, commit it via `ghost_propose` as ops against the active revision:
-- one `replace` per EXISTING scene (`scene_id` + `heading` + `content` = that scene's body),
-- one `insert` per ADDED scene (`before_scene_id` = the scene it lands before; omit for append).
-Ops are plain dicts `{"type","scene_id","before_scene_id","heading","content"}`; `Operation.from_dict` fills absent keys with None/"". `_assemble` applies them SEQUENTIALLY against the evolving snapshot, re-mapping STABLE scene ids — so referencing the original `scene-0..n` ids works in any order (a `replace` keeps its id; an `insert` adds a new one at the target's position). This IS the structurally-risky case: confirm scene count + `problems == []` on the candidate before `ghost_accept_proposal`.
+## Making changes
 
-### Fast path: drive the service from Python (many ops / length iteration)
-The `ghost_*` routes are thin wrappers over one service. For a measure→propose→check→accept→export→verify flow, drive it from `execute_code` rather than hand-transcribing multi-line JSON into a tool call:
-```python
-import sys, os, json
-sys.path.insert(0, r"C:\Users\Salvatore\AppData\Local\hermes\plugins\ghostwriter")
-from screenplay import runtime, rendering, fountain
-svc  = runtime.get_service()
-p    = svc.get_project(project_id)
-snap = svc.read_revision(project_id, p.active_revision_id).snapshot
-ops  = json.load(open("ops.json"))      # list of op dicts (shape above)
-prop = svc.propose(project_id, ops)      # .status 'pending'|'blocked', .checks
-checked = svc.check_proposal(prop.id)    # re-runs the deterministic checks
-rev  = svc.accept_proposal(prop.id)      # -> new active Revision
-exp  = svc.export_pdf(project_id)        # M.Export
-exp.to_dict()                            # {'artifact_path':..., 'page_count':...}
-```
-Build `ops` from your Fountain source: `fountain.parse(text)` → each scene has `.start/.end/.heading`; a scene's body = `text[after-heading-line : scene.end]`.
+All scene edits go through `ghost_propose` with a list of operations:
 
-### Fast page-count (iterate length WITHOUT exporting each time)
-```python
-s   = rendering.RenderSettings()
-npp = int((s.page_height - s.margin_top - s.margin_bottom) // s.leading)
-pages = (len(rendering.layout_lines(snapshot, s)) + npp - 1) // npp
-```
-Tune length here; confirm the final count with `export_pdf(...).page_count`. When the user wants it "longer" / to fill the cap, target the UPPER end (e.g. a solid ~4.5–5 of a 5-page cap) — a 1–2 line leftover final page reads as unfinished.
+| op | fields | effect |
+|----|--------|--------|
+| `insert` | `heading`, `content`, optional `before_scene_id` | new scene (appended when no `before_scene_id`) |
+| `replace` | `scene_id`, `heading`, `content` | rewrite that scene |
+| `delete` | `scene_id` | remove that scene |
 
-### Verify a committed rewrite
-A splice normalizes whitespace, so the accepted snapshot's inter-scene blank-line count can differ from your source — cosmetic only (parsed elements and the PDF are unaffected). Confirm CONTENT survived with a whitespace-insensitive compare, not byte-for-byte: `re.sub(r"\s+"," ",accepted) == re.sub(r"\s+"," ",source)`, and `fountain.parse(accepted)` → N clean scenes, `problems == []`.
+- `content` is the scene **body** in Fountain (everything after the heading).
+  It may contain further scenes, each starting with its own heading — useful
+  when splitting a scene or writing a sequence.
+- Several operations in one call are applied in order and saved as **one**
+  revision, so the writer can undo them as a unit. Scene ids stay stable.
+- **`apply: true`** accepts the proposal at once when every check passes. Use it
+  when the writer asked for the change directly ("write the opening", "make
+  her angrier"). Leave it off when they asked for options, for a suggestion to
+  review, or when the change is large or destructive (deleting or rewriting
+  several scenes) — then tell them it is waiting in the **Proposals** tab, or
+  accept it with `ghost_accept_proposal` once they say yes.
+- If the result says `blocked`, read the failed check, fix the operations and
+  propose again. `PARSE` failures mean malformed Fountain (an unclosed `/*` or
+  `[[`); `SCENE_COUNT_MISMATCH` means a replace/insert body lost or gained a
+  heading unexpectedly.
 
-## Workflow semantics (for explaining to the user)
-- Accept → new **immutable** revision (History count +1, new one active). Reject → nothing changes.
-- Changing the base revision or saving new rules → the pending proposal becomes **STALE** (must reject).
-- A failed check (e.g. `PROTECTED_PASSAGES`, `PAGE_LIMIT`) → **BLOCKED** (can't accept).
-- Restore (History) → copies an old revision to the top as a NEW revision; nothing deleted. Undo → reverts the last change.
+Other edits are saved directly as a new revision:
 
-## Deterministic checks run on every proposal
-`PARSE`, `PROTECTED_PASSAGES` (locked text unchanged / `LOCKED_TEXT_CHANGED`), `ALLOWED_SPEAKERS`, `DIALOGUE_BLOCK_LIMIT`, `PAGE_LIMIT`. Any FAIL → BLOCKED. `PAGE_LIMIT` only fires when the project has a `page_limit` RULE set (default: none); for a length cap, verify with `ghost_export_pdf` → `page_count`.
+- `ghost_find_replace` — rename a character, place or prop across the script.
+  It keeps cues and headings upper-case and mirrors the case elsewhere. Always
+  prefer it to rewriting scenes for a rename.
+- `ghost_set_title_page` — `{"Title", "Credit", "Author", "Source",
+  "Draft date", "Contact"}`. The project title follows the title page.
+- `ghost_update_rules` — page limit, allowed speakers, editorial guidance the
+  writer wants enforced. Follow any `guidance` you see in `ghost_get_project`.
+
+Mistakes are cheap: `ghost_undo` reverts the latest change, `ghost_history` +
+`ghost_restore` bring back any earlier version. Nothing is ever deleted.
+
+## Exporting
+
+`ghost_export` with `format` = `pdf` (standard screenplay layout, returns the
+page count), `fdx` (Final Draft) or `fountain`. Tell the writer the file path.
+Use the page count as the source of truth for length targets (~1 page ≈ 1
+minute of screen time).
+
+## Working with the writer
+
+- Ask only questions whose answer would change the scene (who is in it, how it
+  ends, tone). Make sensible choices for the rest and say what you chose.
+- Keep their voice. When revising, change what was asked and leave the rest of
+  the scene byte-for-byte alone.
+- After a change, summarize in a sentence or two what you wrote and where
+  (scene heading), not the whole text — they can read it in the workspace.
+- Stay consistent with established names, ages, places and facts; read earlier
+  scenes when in doubt.
