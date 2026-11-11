@@ -2821,7 +2821,7 @@ export default {
     ctx.register({
       id: `${ID}.nav`,
       area: SIDEBAR_NAV_AREA,
-      data: { path: '/ghostwriter', label: 'Ghostwriter', codicon: 'writing' }
+      data: { path: '/ghostwriter', label: 'Ghostwriter', codicon: 'edit' }
     })
     ctx.register({
       id: `${ID}.palette`,
