@@ -43,14 +43,6 @@ function b64ToText(b64) {
   return new TextDecoder('utf-8').decode(bytes)
 }
 
-const TABS = [
-  ['script', 'Script'],
-  ['proposals', 'Proposals'],
-  ['rules', 'Rules'],
-  ['history', 'History'],
-  ['export', 'Export'],
-]
-
 // ---------- view preferences (paper tone, size) ----------
 // Persisted in localStorage so they survive restarts.
 const VIEW_KEY = 'gw.view.v1'
@@ -313,11 +305,15 @@ function renderHighlighted(text, hits, currentMatch) {
 // layout, with the scene number in the left gutter. data-scene-id drives the
 // scroll-spy.
 function FullScene({ scene, index }) {
+  const actions = useContext(SceneActionsCtx)
   const els = Array.isArray(scene.elements) ? scene.elements : []
   const num = (scene.meta && scene.meta.scene_number) || String(index + 1)
   return jsxs('div', { className: 'hsp-full-scene', 'data-scene-id': scene.id, children: [
     jsx('span', { className: 'hsp-scene-num', children: num }),
-    scene.parse_ok === false ? jsx('div', { className: 'hsp-hint', children: '⚠ This scene contains unclosed /* or [[ markup.' }) : null,
+    actions ? jsxs('button', { className: 'gw-scene-ask', title: 'Ask the assistant about this scene',
+      onClick: () => actions.onAsk(scene, index), children: [jsx(Icon, { name: 'sparkles', size: 13 }), 'Ask'] }) : null,
+    scene.parse_ok === false ? jsxs('div', { className: 'gw-inline-warn', children: [jsx(Icon, { name: 'alert', size: 14 }),
+      'This scene has an unclosed /* or [[ — text after it is hidden.'] }) : null,
     els.length
       ? els.map((e, i) => jsx(El, { e, group: scene.id, elIndex: i, key: i }))
       : jsx('pre', { className: 'hsp-raw', children: scene.text || '' }),
@@ -337,19 +333,108 @@ const VIEW_PACKS = {
   },
 }
 
+// ---------- icons ----------
+// Inline line icons (24x24, currentColor) so they follow the host theme.
+const ICON_PATHS = {
+  quill: 'M20 4c-6 1-11 5-13 11l-2 5 5-2c6-2 10-7 11-13M7 15l4 4M14 6l4 4',
+  chevronDown: 'M6 9l6 6 6-6',
+  chevronLeft: 'M15 18l-6-6 6-6',
+  chevronRight: 'M9 18l6-6-6-6',
+  search: 'M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14zM21 21l-4.3-4.3',
+  x: 'M18 6L6 18M6 6l12 12',
+  sparkles: 'M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z',
+  page: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h6',
+  review: 'M9 11l3 3 8-8M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9',
+  history: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2',
+  download: 'M12 3v12M7 10l5 5 5-5M5 21h14',
+  sliders: 'M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6',
+  plus: 'M12 5v14M5 12h14',
+  minus: 'M5 12h14',
+  upload: 'M12 21V9M7 14l5-5 5 5M5 3h14',
+  trash: 'M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14',
+  pencil: 'M4 20h4L19 9l-4-4L4 16zM14 6l4 4',
+  code: 'M16 18l6-6-6-6M8 6l-6 6 6 6',
+  eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6z',
+  expand: 'M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7',
+  collapse: 'M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7',
+  send: 'M22 2L11 13M22 2l-7 20-4-9-9-4z',
+  chat: 'M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z',
+  alert: 'M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z',
+  undo: 'M3 7v6h6M3 13a9 9 0 1 0 3-7.7L3 8',
+  check: 'M20 6L9 17l-5-5',
+  film: 'M4 4h16v16H4zM4 9h16M4 15h16M9 4v16M15 4v16',
+  book: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5',
+  file: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5',
+  lock: 'M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4',
+}
+function Icon({ name, size = 16, className }) {
+  return jsx('svg', {
+    className: 'gw-icon' + (className ? ' ' + className : ''), width: size, height: size, viewBox: '0 0 24 24',
+    fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round',
+    'aria-hidden': 'true', children: jsx('path', { d: ICON_PATHS[name] || '' }),
+  })
+}
+
+// ---------- small helpers ----------
+
+function relTime(iso) {
+  if (!iso) return ''
+  const t = new Date(iso).getTime()
+  if (isNaN(t)) return String(iso)
+  const s = Math.round((Date.now() - t) / 1000)
+  if (s < 45) return 'just now'
+  if (s < 3600) return Math.round(s / 60) + ' min ago'
+  if (s < 86400) return Math.round(s / 3600) + ' h ago'
+  if (s < 7 * 86400) return Math.round(s / 86400) + ' d ago'
+  return new Date(t).toLocaleDateString()
+}
+
+const ORIGINS = {
+  create: { label: 'Project created', icon: 'sparkles' },
+  import: { label: 'Imported', icon: 'upload' },
+  manual_save: { label: 'Edited', icon: 'pencil' },
+  proposal: { label: 'Assistant change accepted', icon: 'sparkles' },
+  restore: { label: 'Restored an earlier version', icon: 'undo' },
+}
+
+// "INT. KITCHEN - NIGHT" -> { setting: 'INT', place: 'KITCHEN', time: 'NIGHT' }
+function splitHeading(h) {
+  const s = String(h || '').trim()
+  const m = s.match(/^(INT\.?\/EXT|EXT\.?\/INT|INT\.? ?- ?EXT|I\/E|E\/I|INT|EXT|EST)[.\s]+(.*)$/i)
+  if (!m) return { setting: '', place: s || 'Untitled scene', time: '' }
+  const rest = m[2]
+  const k = rest.lastIndexOf(' - ')
+  return {
+    setting: m[1].toUpperCase().replace(/\.$/, ''),
+    place: (k > 0 ? rest.slice(0, k) : rest).trim() || 'Untitled',
+    time: k > 0 ? rest.slice(k + 3).trim() : '',
+  }
+}
+
+function sceneCast(scene) {
+  const out = []
+  for (const e of (scene.elements || [])) {
+    if (e.kind === 'character' && e.speaker && !out.includes(e.speaker)) out.push(e.speaker)
+  }
+  return out
+}
+
 // ---------- status chip ----------
 
 function Chip({ kind, children }) {
-  return jsx('span', { className: `hsp-chip hsp-chip-${kind}`, children })
+  return jsx('span', { className: `gw-chip gw-chip-${kind}`, children })
 }
+
+const STATUS_LABEL = { PENDING: 'Waiting for review', BLOCKED: 'Needs changes', ACCEPTED: 'Accepted',
+  REJECTED: 'Rejected', STALE: 'Out of date', ADDED: 'New scene', MODIFIED: 'Changed', REMOVED: 'Removed',
+  PASS: 'Pass', FAIL: 'Fail', UNAVAILABLE: 'Skipped' }
 
 function statusKind(s) {
   switch (String(s || '').toUpperCase()) {
     case 'PENDING': return 'pending'
-    case 'BLOCKED': return 'blocked'
-    case 'ACCEPTED': return 'accepted'
-    case 'REJECTED': return 'rejected'
-    case 'STALE': return 'stale'
+    case 'BLOCKED': return 'bad'
+    case 'ACCEPTED': return 'good'
+    case 'REJECTED': case 'STALE': return 'muted'
     case 'ADDED': case 'PASS': return 'good'
     case 'MODIFIED': case 'UNAVAILABLE': return 'warn'
     case 'REMOVED': case 'FAIL': return 'bad'
@@ -357,18 +442,33 @@ function statusKind(s) {
   }
 }
 
-// ---------- project picker (custom dropdown: full control over contrast) ----------
-//
-// A native <select> renders its open list as an OS menu on Windows, which
-// ignores our CSS and comes up light-on-light against a dark theme. This
-// dropdown is plain DOM, so its colors are fully themeable and always
-// high-contrast. It keeps the same "switching projects" unsaved-change guard.
+// ---------- modal ----------
+
+function Modal({ title, onClose, children, footer, wide }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && onClose) onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return jsx('div', { className: 'gw-modal-backdrop', onMouseDown: (e) => { if (e.target === e.currentTarget && onClose) onClose() },
+    children: jsxs('div', { className: 'gw-modal' + (wide ? ' gw-modal-wide' : ''), role: 'dialog', 'aria-modal': 'true', children: [
+      jsxs('div', { className: 'gw-modal-head', children: [
+        jsx('div', { className: 'gw-modal-title', children: title }),
+        onClose ? jsx('button', { className: 'gw-icon-btn', title: 'Close (Esc)', onClick: onClose, children: jsx(Icon, { name: 'x' }) }) : null,
+      ] }),
+      jsx('div', { className: 'gw-modal-body', children }),
+      footer ? jsx('div', { className: 'gw-modal-foot', children: footer }) : null,
+    ] }) })
+}
+
+// ---------- project picker ----------
+// Plain-DOM dropdown (a native <select> opens an unthemed OS menu on Windows).
 
 function ProjectPicker({ projects, value, onChange, onNew, onImport, importAccept, onDelete }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
   const fileRef = useRef(null)
-  const label = projects.find(p => p.id === value)
+  const cur = projects.find(p => p.id === value)
   useEffect(() => {
     if (!open) return
     function onDoc(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
@@ -377,37 +477,105 @@ function ProjectPicker({ projects, value, onChange, onNew, onImport, importAccep
     document.addEventListener('keydown', onKey)
     return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey) }
   }, [open])
-  return jsxs('div', { className: 'hsp-dd', ref, children: [
-    jsx('button', {
-      className: 'hsp-dd-toggle', type: 'button', onClick: () => setOpen(o => !o),
-      children: jsxs('span', { children: [
-        jsx('span', { className: 'hsp-dd-label', children: (label && (label.title || label.id)) || 'Select project' }),
-        jsx('span', { className: 'hsp-dd-caret', children: '▾' })
-      ] })
-    }),
-    open && jsxs('div', { className: 'hsp-dd-list', role: 'listbox', children: [
-      projects.map(p => jsx('button', {
-        className: `hsp-dd-item${p.id === value ? ' hsp-dd-item-active' : ''}`,
-        role: 'option', 'aria-selected': p.id === value, key: p.id,
-        onClick: () => { onChange(p.id); setOpen(false) },
-        children: (p.title || p.id)
-      })),
-      (onNew || onImport) && jsx('div', { className: 'hsp-dd-sep', key: 'sep' }),
-      onNew && jsx('button', {
-        className: 'hsp-dd-item hsp-dd-item-act', role: 'option', key: 'new',
-        onClick: () => { setOpen(false); onNew() }, children: '＋  New project…'
-      }),
-      onImport && jsx('button', {
-        className: 'hsp-dd-item hsp-dd-item-act', role: 'option', key: 'import',
-        onClick: () => { setOpen(false); if (fileRef.current) fileRef.current.click() },
-        children: '⤓  Import file (Fountain, Final Draft, PDF)…' }),
-      (onDelete && value) && jsx('button', {
-        className: 'hsp-dd-item hsp-dd-item-act hsp-dd-item-danger', role: 'option', key: 'delete',
-        onClick: () => { setOpen(false); onDelete(value) }, children: '🗑  Delete this project…' }),
+  const item = (key, icon, label, onClick, cls) => jsxs('button', {
+    className: 'gw-menu-item' + (cls ? ' ' + cls : ''), key, role: 'menuitem',
+    onClick: () => { setOpen(false); onClick() },
+    children: [jsx(Icon, { name: icon, size: 15 }), jsx('span', { children: label })] })
+  return jsxs('div', { className: 'gw-dd', ref, children: [
+    jsxs('button', {
+      className: 'gw-dd-toggle' + (open ? ' gw-dd-open' : ''), type: 'button', onClick: () => setOpen(o => !o),
+      'aria-haspopup': 'menu', 'aria-expanded': open,
+      children: [
+        jsx(Icon, { name: 'film', size: 15 }),
+        jsx('span', { className: 'gw-dd-label', children: (cur && cur.title) || 'Select a project' }),
+        jsx(Icon, { name: 'chevronDown', size: 14, className: 'gw-dd-caret' }),
+      ] }),
+    open && jsxs('div', { className: 'gw-menu', role: 'menu', children: [
+      projects.length ? jsx('div', { className: 'gw-menu-label', children: 'Projects' }) : null,
+      jsx('div', { className: 'gw-menu-scroll', children: projects.map(p => jsxs('button', {
+        className: 'gw-menu-item gw-menu-project' + (p.id === value ? ' gw-menu-active' : ''), key: p.id, role: 'menuitemradio',
+        'aria-checked': p.id === value,
+        onClick: () => { setOpen(false); if (p.id !== value) onChange(p.id) },
+        children: [
+          jsxs('span', { className: 'gw-menu-project-text', children: [
+            jsx('span', { className: 'gw-menu-project-title', children: p.title || 'Untitled' }),
+            jsx('span', { className: 'gw-menu-project-meta', children: (p.author ? p.author + ' · ' : '') + 'edited ' + relTime(p.updated_at) }),
+          ] }),
+          p.id === value ? jsx(Icon, { name: 'check', size: 15 }) : null,
+        ] })) }),
+      jsx('div', { className: 'gw-menu-sep' }),
+      onNew && item('new', 'plus', 'New screenplay…', onNew),
+      onImport && item('import', 'upload', 'Import a file…', () => { if (fileRef.current) fileRef.current.click() }),
+      (onDelete && value) && item('delete', 'trash', 'Delete this project…', () => onDelete(value), 'gw-menu-danger'),
     ] }),
     onImport && jsx('input', { ref: fileRef, type: 'file', accept: importAccept || '', style: { display: 'none' }, onChange: onImport })
   ] })
 }
+
+// ---------- demo script ----------
+// An original short script for "Open the sample script" on the welcome screen.
+const SAMPLE_TITLE = 'The Night Shift'
+const SAMPLE_SCRIPT = `Title: THE NIGHT SHIFT
+Credit: Written by
+Author: Sam Rivera
+Draft date: First draft
+
+FADE IN:
+
+INT. ALL-NIGHT DINER - 3 A.M.
+
+Rain beads on the windows. A neon sign buzzes: OPEN 24 HOURS, though the second "H" gave up years ago.
+
+MAYA OKAFOR (30s, sharp eyes, tired apron) wipes the same stretch of counter for the third time.
+
+The door chimes. LEO (60s, rumpled raincoat, a man who carries his own weather) shakes off the rain and takes the stool nearest the register.
+
+MAYA
+Coffee's fresh. Pie isn't.
+
+LEO
+Then I'll take the coffee and a lie about the pie.
+
+She pours. He wraps both hands around the mug like it owes him money.
+
+MAYA
+(studying him)
+You were here last night. Same stool.
+
+LEO
+Same rain, too. I'm starting to think it follows me.
+
+He slides a folded napkin across the counter. On it, in shaky ink: an address.
+
+MAYA
+What's this?
+
+LEO
+Somewhere you used to live.
+
+Maya goes very still.
+
+CUT TO:
+
+EXT. DINER PARKING LOT - CONTINUOUS
+
+Through the window we watch Maya unfold the napkin. Rain hammers the hood of a lone station wagon. Its headlights blink on, by themselves.
+
+INT. ALL-NIGHT DINER - CONTINUOUS
+
+Maya looks up. Leo's stool is empty. The mug is still steaming.
+
+MAYA
+(quietly)
+*Nobody* knows that address.
+
+She reaches for the phone, hesitates, and pulls off her apron instead.
+
+FADE OUT.
+`
+
+// ---------- scene actions (hover "Ask" chip on the page) ----------
+const SceneActionsCtx = createContext(null)
 
 // ---------- main pane ----------
 
@@ -442,6 +610,24 @@ function ScreenplayPane() {
   const [outlineOpen, setOutlineOpen] = useState(true)    // collapsible scene outline
   const [searchOpen, setSearchOpen] = useState(false)     // find/replace bar (Ctrl/Cmd+F)
   const [focusMode, setFocusMode] = useState(false)       // focus mode (hide chrome)
+  const [chatSeed, setChatSeed] = useState(null)
+  // Follow the host theme: light text on the root means a dark theme.
+  const rootRef = useRef(null)
+  const [theme, setTheme] = useState('dark')
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    const check = () => {
+      const m = getComputedStyle(el).color.match(/\d+(\.\d+)?/g)
+      if (!m) return
+      const [r, g, b] = m.map(Number)
+      setTheme((0.299 * r + 0.587 * g + 0.114 * b) > 140 ? 'dark' : 'light')
+    }
+    check()
+    const mo = new MutationObserver(check)
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] })
+    return () => mo.disconnect()
+  }, [])          // { text, n }: pre-fill the assistant's message box
   const searchRef = useRef(null)
   // Ctrl/Cmd+F summons the find bar; Escape on the input closes it.
   useEffect(() => {
@@ -452,6 +638,18 @@ function ScreenplayPane() {
     return () => document.removeEventListener('keydown', onFindKey)
   }, [])
   useEffect(() => { if (searchOpen && searchRef.current) searchRef.current.focus() }, [searchOpen])
+  // Ctrl/Cmd+S saves the editor (read through a ref so the listener stays stable).
+  const saveRef = useRef(null)
+  useEffect(() => {
+    function onSaveKey(e) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S') && saveRef.current) {
+        e.preventDefault()
+        saveRef.current()
+      }
+    }
+    document.addEventListener('keydown', onSaveKey)
+    return () => document.removeEventListener('keydown', onSaveKey)
+  }, [])
 
   // Full-script scroll view: keep the scene list in sync with the scroll
   // position (scroll-spy) and let list clicks jump the scroll position.
@@ -481,7 +679,7 @@ function ScreenplayPane() {
   const proposalsQ = useQuery({
     queryKey: [ID, 'proposals', pid],
     queryFn: async () => (pid ? api(`/projects/${pid}/proposals`) : null),
-    enabled: !!pid && tab === 'proposals',
+    enabled: !!pid,  // also drives the Review badge and the script banner
     staleTime: 10000, refetchInterval: 10000, retry: 1
   })
   const proposalQ = useQuery({
@@ -598,6 +796,13 @@ function ScreenplayPane() {
     }
   }
 
+  // Opening Review with nothing selected shows the first waiting suggestion.
+  useEffect(() => {
+    if (tab !== 'proposals' || propSel || !Array.isArray(proposalsQ.data)) return
+    const first = proposalsQ.data.find(p => ['PENDING', 'BLOCKED'].includes(String(p.status).toUpperCase()))
+    if (first) setPropSel(first.id)
+  }, [tab, propSel, proposalsQ.data])
+
   // Keep the current hit in view when it changes.
   useEffect(() => {
     if (currentMatch < 0) return
@@ -673,6 +878,7 @@ function ScreenplayPane() {
   }, [notice, noticeLeaving])
 
   const dirty = !!(draft && draft.changed)
+  saveRef.current = (editing && dirty && !busy) ? () => doSaveDoc() : null
 
   function invalidateAll() {
     return qc.invalidateQueries({ queryKey: [ID] })
@@ -996,6 +1202,21 @@ function ScreenplayPane() {
     }
   }
 
+  async function doCreateSample() {
+    setBusy(true)
+    try {
+      const p = await api('/projects', { method: 'POST', body: { title: SAMPLE_TITLE, author: 'Sam Rivera', fountain_text: SAMPLE_SCRIPT } })
+      setTab('script')
+      await invalidateAll()
+      setPid(p.id)
+      setNotice({ kind: 'ok', text: `Opened “${p.title}”. Try the Assistant: “Make Leo more mysterious”.` })
+    } catch (e) {
+      setNotice({ kind: 'err', text: `Could not create the sample: ${errInfo(e).text}` })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function doDeleteProject(id) {
     setBusy(true)
     try {
@@ -1068,230 +1289,263 @@ function ScreenplayPane() {
   const projectFailed = !!pid && projectQ.isError
   const loading = !!pid && !data && !projectFailed
   const scene = sceneId ? sceneById[sceneId] : null
+  const proposals = (proposalsQ.data && Array.isArray(proposalsQ.data)) ? proposalsQ.data : []
+  const openProposals = proposals.filter(p => ['PENDING', 'BLOCKED'].includes(String(p.status).toUpperCase()))
+  const pageCount = (data && data.page_count) || 0
+  const runtime = Math.max(1, Math.round(pageCount - ((titlePage.fields || []).length ? 1 : 0)))
 
-  const projectName = (data && data.project && (data.project.title || data.project.id)) || pid || 'No project'
+  // Open the assistant, optionally pre-filling the message box.
+  function openAssistant(text) {
+    setChatOpen(true)
+    if (tab !== 'script') setTab('script')
+    if (text != null) setChatSeed({ text, n: Date.now() })
+  }
+  const sceneActions = useMemo(() => ({
+    onAsk: (s, i) => openAssistant(`In scene ${i + 1} (${s.heading}), `),
+  }), [tab]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const topbar = jsxs('div', { className: 'hsp-topbar', children: [
-    jsxs('div', { className: 'hsp-topbar-left', children: [
-      jsx('span', { className: 'hsp-brand', children: 'Ghostwriter' }),
-      jsx('span', { className: 'hsp-topbar-sep', children: '/' }),
-      jsx(ProjectPicker, {
-        projects,
-        value: pid || '',
+  const iconBtn = (icon, title, onClick, extra = {}) => jsx('button', {
+    className: 'gw-icon-btn' + (extra.on ? ' gw-on' : ''), title, 'aria-label': title, onClick,
+    disabled: extra.disabled, children: jsx(Icon, { name: icon }) })
+
+  const NAV = [
+    ['script', 'Script', 'page'],
+    ['proposals', 'Review', 'review'],
+    ['history', 'History', 'history'],
+    ['export', 'Export', 'download'],
+    ['rules', 'Rules', 'sliders'],
+  ]
+
+  const topbar = jsxs('header', { className: 'gw-topbar', children: [
+    jsxs('div', { className: 'gw-topbar-left', children: [
+      jsxs('div', { className: 'gw-brand', children: [
+        jsx('span', { className: 'gw-brand-mark', children: jsx(Icon, { name: 'quill', size: 15 }) }),
+        jsx('span', { className: 'gw-brand-name', children: 'Ghostwriter' }),
+      ] }),
+      projects.length ? jsx(ProjectPicker, {
+        projects, value: pid || '',
         onChange: (newId) => requireSaved(() => setPid(newId), 'switching projects'),
         onNew: () => setNewProject({ title: '', author: '', format: 'screenplay', text: '' }),
         onImport: onImportFile,
         importAccept: '.fountain,.spmd,.fdx,.pdf,.txt,.text,.md,text/plain,application/pdf',
-        onDelete: (id) => requireSaved(() => setConfirmDelete(id), 'deleting the project')
-      }),
-      data && jsx('span', { className: 'hsp-format-chip', children: 'SCREENPLAY' })
+        onDelete: (id) => requireSaved(() => setConfirmDelete(id), 'deleting the project'),
+      }) : null,
     ] }),
-    jsxs('div', { className: 'hsp-viewtabs', children:
-      TABS.map(([key, label]) => {
-        const active = tab === key
-        let badge = null
-        if (key === 'proposals' && proposalsQ.data && Array.isArray(proposalsQ.data)) {
-          const open = proposalsQ.data.filter(p => {
-            const s = String(p.status).toUpperCase()
-            return s === 'PENDING' || s === 'BLOCKED'
-          }).length
-          if (open > 0) badge = jsx('span', { className: 'hsp-badge', children: String(open) })
-        }
-        if (key === 'script' && dirty) badge = jsx('span', { className: 'hsp-dot', children: '●' })
-        return jsx('button', {
-          className: `hsp-vtab${active ? ' hsp-vtab-active' : ''}`,
-          key,
-          onClick: () => setTab(key),
-          children: [jsx('span', { children: label }), badge]
-        })
+    pid ? jsx('nav', { className: 'gw-nav', children: NAV.map(([key, label, icon]) => {
+      const badge = key === 'proposals' && openProposals.length
+        ? jsx('span', { className: 'gw-badge', children: String(openProposals.length) })
+        : key === 'script' && dirty ? jsx('span', { className: 'gw-dot', title: 'Unsaved changes' }) : null
+      return jsxs('button', {
+        className: 'gw-nav-item' + (tab === key ? ' gw-nav-active' : ''), key,
+        onClick: () => setTab(key), children: [jsx(Icon, { name: icon, size: 15 }), jsx('span', { children: label }), badge],
       })
-    }),
-    jsxs('div', { className: 'hsp-topbar-right', children: [
-      jsx('button', {
-        className: 'hsp-btn hsp-btn-small hsp-iconbtn',
-        title: focusMode ? 'Exit focus mode' : 'Focus mode (hide chrome)',
-        onClick: () => setFocusMode(f => !f),
-        children: focusMode ? '⤢' : '⤡'
-      }),
-      jsx('button', {
-        className: 'hsp-btn hsp-btn-small hsp-btn-primary' + (chatOpen ? ' hsp-btn-on' : ''),
-        title: chatOpen ? 'Close the assistant' : 'Open Ghostwriter chat',
-        onClick: () => { const next = !chatOpen; setChatOpen(next); if (next) setTab('script') },
-        children: '💬'
-      }),
-      jsx('span', { className: 'hsp-status', children:
-        statusQ.data
-          ? `${statusQ.data.projects} project${statusQ.data.projects === 1 ? '' : 's'} · v${statusQ.data.hermes_version}`
-          : (failed ? 'offline' : '…') })
-    ] })
+    }) }) : jsx('div', {}),
+    jsxs('div', { className: 'gw-topbar-right', children: [
+      failed ? jsx(Chip, { kind: 'bad', children: 'Offline' }) : null,
+      pid ? iconBtn(focusMode ? 'collapse' : 'expand', focusMode ? 'Exit focus mode' : 'Focus mode', () => setFocusMode(f => !f), { on: focusMode }) : null,
+      pid ? jsxs('button', {
+        className: 'gw-btn gw-btn-accent' + (chatOpen ? ' gw-on' : ''),
+        title: chatOpen ? 'Hide the assistant' : 'Write with the assistant',
+        onClick: () => (chatOpen ? setChatOpen(false) : openAssistant()),
+        children: [jsx(Icon, { name: 'sparkles', size: 15 }), jsx('span', { children: 'Assistant' })],
+      }) : null,
+    ] }),
   ] })
 
-  const noticeEl = notice ? jsxs('div', {
-    className: `hsp-notice hsp-notice-${notice.kind}${noticeLeaving ? ' hsp-notice-leave' : ''}`,
-    key: `${notice.kind}:${notice.text}`,
+  const toast = notice ? jsx('div', { className: 'gw-toasts', children: jsxs('div', {
+    className: `gw-toast gw-toast-${notice.kind}${noticeLeaving ? ' gw-toast-leave' : ''}`,
+    key: `${notice.kind}:${notice.text}`, role: 'status',
     children: [
-      jsx('span', { children: notice.text }),
-      notice.action && jsx('button', { className: 'hsp-btn hsp-btn-small', onClick: notice.action, children: notice.actionLabel || 'Retry' }),
-      jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-ghost', onClick: closeNotice, children: '✕' })
-    ]
-  }) : null
+      jsx(Icon, { name: notice.kind === 'ok' ? 'check' : 'alert', size: 16 }),
+      jsx('span', { className: 'gw-toast-text', children: notice.text }),
+      notice.action && jsx('button', { className: 'gw-btn gw-btn-small', onClick: notice.action, children: notice.actionLabel || 'Retry' }),
+      jsx('button', { className: 'gw-icon-btn gw-icon-btn-small', 'aria-label': 'Dismiss', onClick: closeNotice, children: jsx(Icon, { name: 'x', size: 14 }) }),
+    ] }) }) : null
+
+  const emptyState = (icon, title, text, action) => jsxs('div', { className: 'gw-empty', children: [
+    jsx('div', { className: 'gw-empty-icon', children: jsx(Icon, { name: icon, size: 22 }) }),
+    jsx('div', { className: 'gw-empty-title', children: title }),
+    text ? jsx('div', { className: 'gw-empty-text', children: text }) : null,
+    action || null,
+  ] })
 
   // ---------------- Script tab ----------------
 
-  const scriptInner = !pid
-    ? null
-    : loading
-      ? jsx('div', { className: 'hsp-muted', children: 'Loading project…' })
-      : projectFailed
-        ? jsxs('div', { className: 'hsp-error', children: [
-            jsx('div', { children: `Project load failed: ${String((projectQ.error && projectQ.error.message) || projectQ.error)}` }),
-            jsx('button', { className: 'hsp-btn', onClick: () => projectQ.refetch(), children: 'Retry' })
-          ] })
-        : jsxs('div', { className: 'gw-workspace' + (outlineOpen ? '' : ' gw-outline-hidden'), children: [
-              // Left: collapsible scene outline (click to jump; syncs with scroll)
-              jsx('div', { className: 'gw-outline', children: [
-                jsxs('div', { className: 'gw-outline-head', children: [
-                  jsx('span', { className: 'gw-outline-title', children: 'Scenes' }),
-                  jsx('span', { className: 'gw-outline-count', children: String(scenes.length) }),
-                  jsx('button', { className: 'gw-iconbtn', title: 'Hide outline', onClick: () => setOutlineOpen(false), children: '⟨' })
-                ] }),
-                jsx('div', { className: 'gw-outline-list', ref: navRef, children: scenes.length === 0
-                  ? jsx('div', { className: 'hsp-hint', style: { padding: '8px 10px' }, children: 'No scenes yet.' })
-                  : scenes.map(s =>
-                  jsx('button', {
-                    className: `gw-outline-row${sceneId === s.id ? ' gw-outline-active' : ''}`,
-                    'data-nav-id': s.id,
-                    key: s.id,
-                    onClick: () => {
-                      if (s.id === sceneId) return
-                      requireSaved(() => goToSceneNow(s.id),
-                        `jumping to “${s.heading || 'untitled'}”`)
-                    },
-                    children: jsxs('span', { className: 'gw-outline-text', children: pack.navText(s) })
-                  })) })
+  const modeSwitch = jsx('div', { className: 'gw-segmented', role: 'tablist', children: [
+    ['read', 'Read', 'eye'], ['formatted', 'Edit', 'pencil'], ['source', 'Fountain', 'code'],
+  ].map(([m, label, icon]) => {
+    const active = m === 'read' ? !editing : (editing && draft && draft.mode === m)
+    return jsxs('button', {
+      className: 'gw-seg' + (active ? ' gw-seg-active' : ''), key: m, role: 'tab', 'aria-selected': active,
+      title: m === 'read' ? 'Read the formatted script' : m === 'formatted' ? 'Edit text on the page' : 'Edit the raw Fountain text',
+      onClick: () => {
+        if (active) return
+        if (m === 'read') requireSaved(() => { setDraft(null); setEditing(false) }, 'leaving the editor')
+        else if (editing) requireSaved(() => { setDraft(null); setEditing(false); setTimeout(() => startEdit(m), 0) }, 'switching editor')
+        else startEdit(m)
+      },
+      children: [jsx(Icon, { name: icon, size: 14 }), label],
+    })
+  }) })
+
+  const stageToolbar = jsxs('div', { className: 'gw-toolbar', children: [
+    jsxs('div', { className: 'gw-toolbar-left', children: [
+      !outlineOpen ? iconBtn('chevronRight', 'Show scenes', () => setOutlineOpen(true)) : null,
+      modeSwitch,
+    ] }),
+    jsxs('div', { className: 'gw-toolbar-right', children: [
+      iconBtn('search', 'Find & replace (Ctrl/⌘+F)', () => {
+        const next = !searchOpen
+        setSearchOpen(next)
+        if (!next) { setSearchQuery(''); setReplaceQuery(''); setCurrentMatch(-1) }
+      }, { on: searchOpen }),
+      jsx('span', { className: 'gw-toolbar-sep' }),
+      jsxs('div', { className: 'gw-zoom', title: 'Text size', children: [
+        iconBtn('minus', 'Smaller text', () => updateView({ size: Math.max(11, view.size - 1) }), { disabled: view.size <= 11 }),
+        jsx('span', { className: 'gw-zoom-val', children: Math.round(view.size / 13 * 100) + '%' }),
+        iconBtn('plus', 'Larger text', () => updateView({ size: Math.min(18, view.size + 1) }), { disabled: view.size >= 18 }),
+      ] }),
+      jsx('span', { className: 'gw-toolbar-sep' }),
+      jsx('div', { className: 'gw-swatches', role: 'radiogroup', 'aria-label': 'Paper colour', children: PAPER_ORDER.map(k => jsx('button', {
+        className: 'gw-swatch' + (view.paper === k ? ' gw-swatch-active' : ''), key: k, role: 'radio', 'aria-checked': view.paper === k,
+        title: 'Paper: ' + PAPER[k].label, style: { background: PAPER[k].bg }, onClick: () => updateView({ paper: k }) })) }),
+    ] }),
+  ] })
+
+  const searchBar = searchOpen ? jsxs('div', { className: 'gw-findbar', children: [
+    jsxs('div', { className: 'gw-find-field', children: [
+      jsx(Icon, { name: 'search', size: 14 }),
+      jsx('input', {
+        type: 'text', ref: searchRef, placeholder: 'Find in script', value: searchQuery,
+        onChange: (e) => { setSearchQuery(e.target.value); setCurrentMatch(e.target.value ? 0 : -1) },
+        onKeyDown: (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); stepMatch(e.shiftKey ? -1 : 1) }
+          else if (e.key === 'Escape') { setSearchOpen(false); setSearchQuery(''); setReplaceQuery(''); setCurrentMatch(-1) }
+        }
+      }),
+      jsx('span', { className: 'gw-find-count', children: searchQuery ? (matches.length ? `${currentMatch < 0 ? 0 : currentMatch + 1} of ${matches.length}` : 'No results') : '' }),
+      iconBtn('chevronDown', 'Next (Enter)', () => stepMatch(1), { disabled: !matches.length }),
+    ] }),
+    jsxs('div', { className: 'gw-find-field', children: [
+      jsx(Icon, { name: 'pencil', size: 14 }),
+      jsx('input', { type: 'text', placeholder: 'Replace with', value: replaceQuery, onChange: (e) => setReplaceQuery(e.target.value),
+        onKeyDown: (e) => { if (e.key === 'Enter') { e.preventDefault(); doReplace('current') } } }),
+    ] }),
+    jsx('button', { className: 'gw-btn gw-btn-small', disabled: !matches.length || currentMatch < 0 || busy || editing, onClick: () => doReplace('current'), children: 'Replace' }),
+    jsx('button', { className: 'gw-btn gw-btn-small', disabled: !matches.length || busy || editing, onClick: () => doReplace('all'), children: 'Replace all' }),
+    iconBtn('x', 'Close (Esc)', () => { setSearchOpen(false); setSearchQuery(''); setReplaceQuery(''); setCurrentMatch(-1) }),
+  ] }) : null
+
+  const reviewBanner = (openProposals.length && !editing) ? jsxs('div', { className: 'gw-banner', children: [
+    jsx(Icon, { name: 'sparkles', size: 16 }),
+    jsx('span', { children: openProposals.length === 1 ? 'The assistant suggested a change for you to review.'
+      : `The assistant suggested ${openProposals.length} changes for you to review.` }),
+    jsx('button', { className: 'gw-btn gw-btn-small gw-btn-accent', onClick: () => { setTab('proposals'); setPropSel(openProposals[0].id) }, children: 'Review' }),
+  ] }) : null
+
+  const outline = jsxs('aside', { className: 'gw-outline', children: [
+    jsxs('div', { className: 'gw-outline-head', children: [
+      jsx('span', { className: 'gw-outline-title', children: 'Scenes' }),
+      jsx('span', { className: 'gw-count', children: String(scenes.length) }),
+      jsx('span', { style: { flex: 1 } }),
+      iconBtn('chevronLeft', 'Hide scenes', () => setOutlineOpen(false)),
+    ] }),
+    jsx('div', { className: 'gw-outline-list', ref: navRef, children: scenes.length === 0
+      ? jsx('div', { className: 'gw-outline-empty', children: 'Scenes appear here as you write.' })
+      : scenes.map((s, i) => {
+          const h = splitHeading(s.heading)
+          const cast = sceneCast(s)
+          return jsxs('button', {
+            className: 'gw-scene-row' + (sceneId === s.id ? ' gw-scene-row-active' : ''),
+            'data-nav-id': s.id, key: s.id,
+            onClick: () => { if (s.id !== sceneId) requireSaved(() => goToSceneNow(s.id), `jumping to “${s.heading || 'untitled'}”`) },
+            children: [
+              jsx('span', { className: 'gw-scene-idx', children: (s.meta && s.meta.scene_number) || String(i + 1) }),
+              jsxs('span', { className: 'gw-scene-text', children: [
+                jsxs('span', { className: 'gw-scene-place', children: [
+                  h.setting ? jsx('span', { className: 'gw-setting', children: h.setting }) : null, h.place] }),
+                jsx('span', { className: 'gw-scene-meta', children: [h.time, cast.slice(0, 3).join(', ') + (cast.length > 3 ? ` +${cast.length - 3}` : '')].filter(Boolean).join(' · ') || ' ' }),
               ] }),
-              // Center: the manuscript paper
-              jsxs('div', { className: 'gw-stage', children: [
-                !outlineOpen && jsx('button', { className: 'gw-iconbtn gw-outline-show', title: 'Show outline', onClick: () => setOutlineOpen(true), children: '⟩' }),
-                jsxs('div', { className: 'gw-slate', children: [
-                  jsx('div', { className: 'gw-slate-title', children:
-                    (editing ? (draft && draft.mode === 'source' ? 'Editing Fountain source' : 'Editing') : (scene ? (scene.heading || '(untitled scene)') : (data && data.project ? data.project.title : '')))
-                    + (dirty ? '  ● unsaved' : '') }),
-                  !editing ? jsx('button', { className: 'hsp-btn hsp-btn-small', title: 'Edit the script on the page', onClick: () => startEdit('formatted'), children: 'Edit' }) : null,
-                  !editing ? jsx('button', { className: 'hsp-btn hsp-btn-small', title: 'Edit the raw Fountain text (add scenes, characters, anything)', onClick: () => startEdit('source'), children: 'Edit Fountain' }) : null
-                ] }),
-                // View settings: find (Ctrl/Cmd+F) + paper tone + size (persisted in localStorage).
-                jsxs('div', { className: 'hsp-viewbar', children: [
-                  jsx('button', {
-                    className: 'hsp-btn hsp-btn-small hsp-iconbtn' + (searchOpen ? ' hsp-btn-on' : ''), type: 'button',
-                    title: 'Find (Ctrl/Cmd+F)',
-                    onClick: () => {
-                      const next = !searchOpen
-                      setSearchOpen(next)
-                      if (!next) { setSearchQuery(''); setReplaceQuery(''); setCurrentMatch(-1) }
-                    },
-                    children: '🔍'
-                  }),
-                  jsx('span', { className: 'hsp-viewbar-sep', children: '|' }),
-                  jsx('button', {
-                    className: 'gw-tone', type: 'button',
-                    title: 'Paper tone: ' + (PAPER[view.paper] ? PAPER[view.paper].label : 'Pale blue') + ' (click to change)',
-                    onClick: () => {
-                      const order = PAPER_ORDER
-                      const idx = order.indexOf(view.paper)
-                      updateView({ paper: order[(idx + 1) % order.length] })
-                    },
-                    children: jsx('span', { className: 'gw-tone-dot', style: { background: (PAPER[view.paper] || PAPER.blue).bg } })
-                  }),
-                  jsx('span', { className: 'hsp-viewbar-sep', children: '|' }),
-                  jsx('span', { className: 'hsp-viewbar-label', children: 'Size' }),
-                  jsx('input', {
-                    className: 'hsp-size-range', type: 'range', min: 11, max: 18, step: 0.5,
-                    value: Number.isFinite(Number(view.size)) ? Number(view.size) : 13,
-                    onChange: (e) => updateView({ size: Number(e.target.value) }),
-                    title: 'Manuscript font size'
-                  }),
-                  jsx('span', { className: 'hsp-viewbar-label hsp-size-val', children: (Number.isFinite(Number(view.size)) ? Number(view.size) : 13) + 'px' }),
-                ] }),
-                // Search / find & replace bar — hidden until Ctrl/Cmd+F or the Find button.
-                searchOpen ? jsxs('div', { className: 'hsp-searchbar', children: [
-                  jsx('span', { className: 'hsp-searchbar-ico', children: '🔍' }),
-                  jsx('input', {
-                    className: 'hsp-searchbar-input', type: 'text', ref: searchRef,
-                    placeholder: 'Search…', value: searchQuery,
-                    onChange: (e) => { setSearchQuery(e.target.value); setCurrentMatch(-1) },
-                    onKeyDown: (e) => {
-                      if (e.key === 'Enter') stepMatch(e.shiftKey ? -1 : 1)
-                      else if (e.key === 'Escape') { setSearchQuery(''); setCurrentMatch(-1) }
-                    }
-                  }),
-                  matches.length
-                    ? jsxs('span', { className: 'hsp-searchbar-count', children: [
-                        (currentMatch < 0 ? 0 : currentMatch + 1), '/', matches.length
-                      ] })
-                    : null,
-                  jsx('button', { className: 'hsp-btn hsp-btn-small', title: 'Previous match (Shift+Enter)', disabled: !matches.length, onClick: () => stepMatch(-1), children: '↑' }),
-                  jsx('button', { className: 'hsp-btn hsp-btn-small', title: 'Next match (Enter)', disabled: !matches.length, onClick: () => stepMatch(1), children: '↓' }),
-                  jsx('span', { className: 'hsp-viewbar-sep', children: '|' }),
-                  jsx('input', {
-                    className: 'hsp-searchbar-input', type: 'text',
-                    placeholder: 'Replace with…', value: replaceQuery,
-                    onChange: (e) => setReplaceQuery(e.target.value)
-                  }),
-                  jsx('button', { className: 'hsp-btn hsp-btn-small', title: 'Replace the highlighted match', disabled: !matches.length || currentMatch < 0 || busy, onClick: () => doReplace('current'), children: 'Replace' }),
-                  jsx('button', { className: 'hsp-btn hsp-btn-small', title: 'Replace every match', disabled: !matches.length || busy, onClick: () => doReplace('all'), children: 'All' }),
-                  jsx('button', { className: 'hsp-btn hsp-btn-small hsp-iconbtn', title: 'Close search', onClick: () => { setSearchQuery(''); setReplaceQuery(''); setCurrentMatch(-1) }, children: '×' })
-                ] }) : null,
-                editing && draft
-                  ? jsxs('div', { className: 'hsp-editor hsp-editor-doc', children: [
-                      draft.mode === 'source'
-                        ? jsx('textarea', {
-                            className: 'hsp-textarea hsp-source', value: draft.source, spellCheck: true,
-                            onChange: (e) => { const v = e.target.value; setDraft(d => ({ ...d, source: v, changed: true })) },
-                          })
-                        : jsx('div', { className: 'hsp-editor-paper', children: jsxs('div', { className: 'hsp-page', children: [
-                            jsx(TitlePageEditor, {
-                              fields: draft.title,
-                              onChange: (key, val) => setDraft(d => ({ ...d, title: { ...d.title, [key]: val }, titleChanged: true, changed: true })),
-                            }),
-                            draft.structure.map((sc) => jsx('div', { className: 'hsp-edit-scene', key: sc.id, children:
-                              sc.elements.map((e) => jsx(EditElement, {
-                                kind: e.kind, key: e.key,
-                                value: draft.values[e.key] != null ? draft.values[e.key] : e.text,
-                                onChange: (val) => setDraft(d => ({ ...d, values: { ...d.values, [e.key]: val }, changed: true })),
-                              })),
-                            })),
-                            jsx('div', { className: 'hsp-hint hsp-full-hint', children:
-                              'Edit text in place. To add new scenes or speeches use Edit Fountain, or ask in chat.' }),
-                          ] }) }),
-                      jsxs('div', { className: 'hsp-actions', children: [
-                        jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy || !dirty, onClick: () => doSaveDoc(), children: busy ? 'Saving…' : 'Save' }),
-                        jsx('button', {
-                          className: 'hsp-btn', disabled: busy,
-                          onClick: () => { setDraft(null); setEditing(false) },
-                          children: dirty ? 'Discard changes' : 'Close editor' }),
-                        dirty ? jsx('span', { className: 'hsp-hint', children: 'unsaved changes' }) : null
-                      ] })
-                    ] })
-                  : jsxs('div', { className: 'hsp-full', ref: fullRef, onScroll: onFullScroll, children: [
-                      jsxs('div', { className: 'hsp-page', children: [
-                        jsx(TitlePageView, { titlePage }),
-                        preamble.length ? jsx('div', { className: 'hsp-full-scene hsp-preamble', children:
-                          preamble.map((e, i) => jsx(El, { e, group: 'preamble', elIndex: i, key: i })) }) : null,
-                        scenes.map((s, i) => jsx(pack.Block, { scene: s, index: i, key: s.id })),
-                        scenes.length === 0 ? jsx('div', { className: 'hsp-hint hsp-full-hint', children:
-                          'No scenes yet. Describe your first scene in the chat (💬), or click Edit Fountain and start typing — e.g. INT. DINER - NIGHT.' }) : null,
-                      ] }),
-                    ] }),
-                jsx('div', { className: 'gw-statusbar', children: [
-                  jsx('span', { children: (data && data.page_count ? data.page_count : 0) + ' page' + (data && data.page_count === 1 ? '' : 's') }),
-                  jsx('span', { className: 'gw-statusbar-sep', children: '·' }),
-                  jsx('span', { children: scenes.length + ' scene' + (scenes.length === 1 ? '' : 's') }),
-                  jsx('span', { className: 'gw-statusbar-sep', children: '·' }),
-                  jsx('span', { children: wordCount.toLocaleString() + ' words' }),
-                ] })
-              ] })
+              s.parse_ok === false ? jsx(Icon, { name: 'alert', size: 14, className: 'gw-warn-icon' }) : null,
             ] })
+        }) }),
+    jsxs('button', { className: 'gw-outline-add', onClick: () => openAssistant('Write a new scene where '),
+      children: [jsx(Icon, { name: 'plus', size: 14 }), 'New scene with the assistant'] }),
+  ] })
+
+  const page = editing && draft
+    ? jsxs('div', { className: 'gw-editor', children: [
+        draft.mode === 'source'
+          ? jsx('textarea', {
+              className: 'gw-source', value: draft.source, spellCheck: true, autoFocus: true,
+              'aria-label': 'Fountain source',
+              onChange: (e) => { const v = e.target.value; setDraft(d => ({ ...d, source: v, changed: true })) },
+            })
+          : jsx('div', { className: 'hsp-editor-paper', children: jsxs('div', { className: 'hsp-page', children: [
+              jsx(TitlePageEditor, {
+                fields: draft.title,
+                onChange: (key, val) => setDraft(d => ({ ...d, title: { ...d.title, [key]: val }, titleChanged: true, changed: true })),
+              }),
+              draft.structure.map((sc) => jsx('div', { className: 'hsp-edit-scene', key: sc.id, children:
+                sc.elements.map((e) => jsx(EditElement, {
+                  kind: e.kind, key: e.key,
+                  value: draft.values[e.key] != null ? draft.values[e.key] : e.text,
+                  onChange: (val) => setDraft(d => ({ ...d, values: { ...d.values, [e.key]: val }, changed: true })),
+                })),
+              })),
+              jsx('div', { className: 'gw-page-hint', children: 'Tip: to add new scenes or speeches, switch to Fountain or ask the assistant.' }),
+            ] }) }),
+        jsxs('div', { className: 'gw-savebar' + (dirty ? ' gw-savebar-dirty' : ''), children: [
+          jsx('span', { className: 'gw-savebar-text', children: dirty ? 'Unsaved changes' : 'No changes yet' }),
+          jsx('button', { className: 'gw-btn', disabled: busy, onClick: () => { setDraft(null); setEditing(false) },
+            children: dirty ? 'Discard' : 'Done' }),
+          jsxs('button', { className: 'gw-btn gw-btn-primary', disabled: busy || !dirty, onClick: () => doSaveDoc(),
+            children: [busy ? 'Saving…' : 'Save', jsx('kbd', { children: '⌘S' })] }),
+        ] }),
+      ] })
+    : jsx('div', { className: 'hsp-full', ref: fullRef, onScroll: onFullScroll, children:
+        jsx(SceneActionsCtx.Provider, { value: sceneActions, children: jsxs('div', { className: 'hsp-page', children: [
+          jsx(TitlePageView, { titlePage }),
+          preamble.length ? jsx('div', { className: 'hsp-full-scene hsp-preamble', children:
+            preamble.map((e, i) => jsx(El, { e, group: 'preamble', elIndex: i, key: i })) }) : null,
+          scenes.map((s, i) => jsx(pack.Block, { scene: s, index: i, key: s.id })),
+          scenes.length === 0 ? jsxs('div', { className: 'gw-page-empty', children: [
+            jsx('div', { className: 'gw-page-empty-title', children: 'FADE IN:' }),
+            jsx('div', { children: 'Your first scene is waiting. Describe it to the assistant, or start typing in Fountain.' }),
+            jsxs('div', { className: 'gw-row', children: [
+              jsxs('button', { className: 'gw-btn gw-btn-accent', onClick: () => openAssistant('Write the opening scene: '),
+                children: [jsx(Icon, { name: 'sparkles', size: 15 }), 'Write it with the assistant'] }),
+              jsxs('button', { className: 'gw-btn', onClick: () => startEdit('source'),
+                children: [jsx(Icon, { name: 'code', size: 15 }), 'Type it myself'] }),
+            ] }),
+          ] }) : null,
+        ] }) }) })
+
+  const scriptInner = !pid ? null
+    : loading
+      ? jsx('div', { className: 'gw-loading', children: [jsx('span', { className: 'gw-spinner' }), 'Opening your script…'] })
+      : projectFailed
+        ? emptyState('alert', 'Could not open this project', String((projectQ.error && projectQ.error.message) || projectQ.error),
+            jsx('button', { className: 'gw-btn', onClick: () => projectQ.refetch(), children: 'Try again' }))
+        : jsxs('div', { className: 'gw-workspace' + (outlineOpen ? '' : ' gw-outline-hidden'), children: [
+            outlineOpen ? outline : null,
+            jsxs('section', { className: 'gw-stage', children: [
+              stageToolbar,
+              searchBar,
+              reviewBanner,
+              page,
+              jsxs('footer', { className: 'gw-statusbar', children: [
+                jsx('span', { children: pageCount + (pageCount === 1 ? ' page' : ' pages') }),
+                jsx('span', { children: '·' }),
+                jsx('span', { title: 'Rule of thumb: one page ≈ one minute', children: '≈ ' + runtime + ' min' }),
+                jsx('span', { children: '·' }),
+                jsx('span', { children: scenes.length + (scenes.length === 1 ? ' scene' : ' scenes') }),
+                jsx('span', { children: '·' }),
+                jsx('span', { children: wordCount.toLocaleString() + ' words' }),
+                scene && !editing ? jsx('span', { className: 'gw-statusbar-right', children: scene.heading }) : null,
+              ] }),
+            ] }),
+          ] })
 
   // Drag the divider to resize the chat column (width persists per user).
   function onResizeStart(e) {
@@ -1301,7 +1555,7 @@ function ScreenplayPane() {
       const el = splitRef.current
       if (!el) return
       const rect = el.getBoundingClientRect()
-      const w = Math.max(260, Math.min(Math.max(280, rect.width - 360), Math.round(rect.right - ev.clientX)))
+      const w = Math.max(300, Math.min(Math.max(320, rect.width - 420), Math.round(rect.right - ev.clientX)))
       setChatWidth(w)
       saveChatWidth(w)
     }
@@ -1315,754 +1569,758 @@ function ScreenplayPane() {
     window.addEventListener('mouseup', onUp)
     try { document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none' } catch (_) {}
   }
-  // Side-by-side split (feature #3): when the Chat rail is open, the manuscript
-  // shares the Script tab with a compact chat column — read your text and talk
-  // to the model at the same time, in the same view (no separate window/tab).
-  const scriptTab = chatOpen
-    ? jsxs('div', { className: 'hsp-split', ref: splitRef, children: [
-        jsx('div', { className: 'hsp-split-main', children: scriptInner }),
-        jsx('div', {
-          className: 'gw-resize-handle' + (resizing ? ' gw-resize-active' : ''),
-          onMouseDown: onResizeStart
-        }),
-        jsx('div', { className: 'gw-chat-col', style: { width: chatWidth + 'px' }, children:
-          jsx(GwChatRail, {
-            projects, currentPid: pid, currentData: data,
-            onClose: () => setChatOpen(false),
-            onTurnDone: invalidateAll
-          })
-        })
-      ] })
-    : scriptInner
 
-  // ---------------- Proposals tab ----------------
+  // One stable tree whether or not the assistant is open, so opening it never
+  // re-mounts the page (and loses the reading position).
+  const scriptTab = jsxs('div', { className: 'gw-split', ref: splitRef, children: [
+    jsx('div', { className: 'gw-split-main', key: 'main', children: scriptInner }),
+    chatOpen ? jsx('div', { className: 'gw-resize' + (resizing ? ' gw-resize-active' : ''), key: 'rz', onMouseDown: onResizeStart,
+      title: 'Drag to resize' }) : null,
+    chatOpen ? jsx('div', { className: 'gw-chat-col', key: 'chat', style: { width: chatWidth + 'px' }, children:
+      jsx(GwChatRail, {
+        projects, currentPid: pid, currentData: data, focusScene: scene, seed: chatSeed,
+        onClose: () => setChatOpen(false),
+        onTurnDone: invalidateAll,
+      }) }) : null,
+  ] })
 
-  const proposals = (proposalsQ.data && Array.isArray(proposalsQ.data)) ? proposalsQ.data : []
+  // ---------------- Review tab ----------------
+
   const proposal = proposalQ.data
-  const proposalsTab = !pid ? null : jsxs('div', { className: 'hsp-proposals', children: [
-    jsx('div', { className: 'hsp-list-label', children:
-      proposalsQ.isPending ? 'Loading proposals…' : (proposalsQ.isError ? 'Failed to load proposals.' : `${proposals.length} proposal${proposals.length === 1 ? '' : 's'}`) }),
-    jsx('div', { className: 'hsp-list', children: proposals.map(p => {
-      const st = String(p.status || '').toUpperCase()
-      const heads = (p.diff || [])
-        .filter(d => d.status && d.status !== 'unchanged')
-        .map(d => d.heading || d.scene_id)
-      return jsxs('button', {
-        className: `hsp-row${propSel === p.id ? ' hsp-row-active' : ''}`,
-        key: p.id,
-        onClick: () => setPropSel(p.id),
-        children: [
-          jsxs('div', { className: 'hsp-row-main', children: [
-            jsx('div', { className: 'hsp-row-title', children: heads.length ? heads.join(', ') : '(no scene changes)' }),
-            jsxs('div', { className: 'hsp-row-meta', children: [
-              fmtTime(p.created_at),
-              ` · based ${String(p.base_revision_id || '').slice(0, 12)}…`
-            ] })
+  const pStatus = proposal ? String(proposal.status || '').toUpperCase() : ''
+  const proposalsTab = !pid ? null : jsxs('div', { className: 'gw-review', children: [
+    proposals.length === 0 ? null : jsxs('div', { className: 'gw-review-list', children: [
+      jsx('div', { className: 'gw-section-label', children: proposalsQ.isPending ? 'Loading…'
+        : `${openProposals.length} waiting · ${proposals.length} total` }),
+      proposals.length === 0 && !proposalsQ.isPending
+        ? jsx('div', { className: 'gw-muted gw-pad', children: 'Nothing to review yet.' })
+        : proposals.map(p => {
+            const st = String(p.status || '').toUpperCase()
+            const changes = (p.diff || []).filter(d => d.status && d.status !== 'unchanged')
+            return jsxs('button', {
+              className: 'gw-card gw-proposal-card' + (propSel === p.id ? ' gw-card-active' : ''), key: p.id,
+              onClick: () => setPropSel(p.id),
+              children: [
+                jsxs('div', { className: 'gw-card-top', children: [
+                  jsx(Chip, { kind: statusKind(st), children: STATUS_LABEL[st] || st }),
+                  jsx('span', { className: 'gw-muted gw-small', children: relTime(p.created_at) }),
+                ] }),
+                jsx('div', { className: 'gw-card-title', children: changes.length
+                  ? changes.map(d => d.heading || d.scene_id).join(' · ') : 'No scene changes' }),
+                jsx('div', { className: 'gw-muted gw-small', children: changes.length + (changes.length === 1 ? ' scene' : ' scenes') }),
+              ] })
+          }),
+    ] }),
+    jsx('div', { className: 'gw-review-detail', children: !proposal
+      ? emptyState('review', proposals.length ? 'Select a suggestion' : 'No suggestions yet',
+          proposals.length ? 'Pick one on the left to compare it with your script.'
+            : 'When you ask the assistant for options or bigger rewrites, its suggestions wait here so you can compare them with your script before accepting.',
+          proposals.length ? null : jsxs('button', { className: 'gw-btn gw-btn-accent', onClick: () => openAssistant(), children: [jsx(Icon, { name: 'sparkles', size: 15 }), 'Open the assistant'] }))
+      : jsxs('div', { className: 'gw-detail', children: [
+          jsxs('div', { className: 'gw-detail-head', children: [
+            jsxs('div', { children: [
+              jsx('div', { className: 'gw-detail-title', children: (proposal.changes || []).map(c => c.heading).join(' · ') || 'Suggested change' }),
+              jsxs('div', { className: 'gw-muted gw-small', children: [
+                jsx(Chip, { kind: statusKind(pStatus), children: STATUS_LABEL[pStatus] || pStatus }),
+                '  Suggested ' + relTime(proposal.created_at)] }),
+            ] }),
+            jsxs('div', { className: 'gw-row', children: [
+              (pStatus !== 'ACCEPTED' && pStatus !== 'REJECTED') ? jsx('button', {
+                className: 'gw-btn', disabled: busy, onClick: () => doReject(proposal.id), children: 'Reject' }) : null,
+              ((pStatus === 'PENDING' || pStatus === 'BLOCKED') && !proposal.stale && !proposal.conflict) ? jsxs('button', {
+                className: 'gw-btn gw-btn-primary', disabled: busy || pStatus === 'BLOCKED',
+                title: pStatus === 'BLOCKED' ? 'A check failed — see below' : 'Apply this change to your script',
+                onClick: () => requireSaved(() => doAccept(proposal.id), 'accepting this change'),
+                children: [jsx(Icon, { name: 'check', size: 15 }), 'Accept change'] }) : null,
+            ] }),
           ] }),
-          jsx(Chip, { kind: statusKind(st), children: st })
-        ]
-      })
-    }) }),
-    proposal && jsxs('div', { className: 'hsp-proposal-detail', children: [
-      jsxs('div', { className: 'hsp-proposal-head', children: [
-        jsx(Chip, { kind: statusKind(proposal.status), children: String(proposal.status || '').toUpperCase() }),
-        jsx('span', { className: 'hsp-hint', children:
-          `base ${String(proposal.base_revision_id || '').slice(0, 12)}…${proposal.base_is_active ? ' (active)' : ' (older)'} · rules ${String(proposal.rules_id || '').slice(0, 12)}…` }),
-        jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-ghost', onClick: () => setPropSel(null), children: 'Close' })
-      ] }),
-      proposal.stale &&
-        jsx('div', { className: 'hsp-notice hsp-notice-err', children:
-          'Stale proposal: its base revision or rules no longer exist. Reject it to clear it.' }),
-      !proposal.stale && !proposal.base_is_active &&
-        jsx('div', { className: 'hsp-notice hsp-notice-err', children:
-          (proposal.conflict
-            ? 'This proposal can no longer be applied: ' + proposal.conflict + '. Reject it and ask for the change again.'
-            : 'The script changed since this proposal was made. Accepting re-applies it to the current text (only its own scenes change).') }),
-      jsx('div', { className: 'hsp-changes', children: (proposal.changes || []).map(c =>
-        jsxs('div', { className: 'hsp-change', key: c.scene_id || c.heading, children: [
-          jsxs('div', { className: 'hsp-change-head', children: [
-            jsx(Chip, { kind: statusKind(c.status), children: String(c.status || '').toUpperCase() }),
-            jsx('span', { className: 'hsp-change-heading', children: c.heading || '(untitled)' })
-          ] }),
-          jsxs('div', { className: 'hsp-diff', children: [
-            c.status !== 'added' ? jsxs('div', { className: 'hsp-diff-col', children: [
-              jsx('div', { className: 'hsp-diff-label', children: 'Before' }),
-              jsx('pre', { className: 'hsp-pre', children: c.before || '—' })
-            ] }) : null,
-            c.status !== 'removed' ? jsxs('div', { className: 'hsp-diff-col', children: [
-              jsx('div', { className: 'hsp-diff-label', children: 'After' }),
-              jsx('pre', { className: 'hsp-pre', children: c.after || '—' })
-            ] }) : null
-          ] })
-        ] })) }),
-      (proposal.checks || []).length > 0 && jsxs('div', { className: 'hsp-checks', children: [
-        jsx('div', { className: 'hsp-list-label', children: 'Deterministic checks' }),
-        (proposal.checks || []).map((c, i) => jsxs('div', { className: 'hsp-check', key: i, children: [
-          jsx(Chip, { kind: statusKind(c.status), children: String(c.status || '').toUpperCase() }),
-          jsx('span', { className: 'hsp-check-name', children: c.name }),
-          c.detail ? jsx('span', { className: 'hsp-hint', children: c.detail }) : null
-        ] }))
-      ] }),
-      jsxs('div', { className: 'hsp-actions', children: [
-        (() => {
-          const s = String(proposal.status).toUpperCase()
-          return (s === 'PENDING' || s === 'BLOCKED') && !proposal.stale
-            ? jsx('button', {
-                className: 'hsp-btn hsp-btn-primary', disabled: busy,
-                onClick: () => requireSaved(() => doAccept(proposal.id), 'accepting this proposal'),
-                children: 'Accept proposal'
-              }) : null
-        })(),
-        (() => {
-          const s = String(proposal.status).toUpperCase()
-          return (s !== 'ACCEPTED' && s !== 'REJECTED')
-            ? jsx('button', {
-                className: 'hsp-btn hsp-btn-danger', disabled: busy,
-                onClick: () => doReject(proposal.id),
-                children: 'Reject'
-              }) : null
-        })()
-      ] })
-    ] })
+          proposal.stale ? jsxs('div', { className: 'gw-callout gw-callout-warn', children: [jsx(Icon, { name: 'alert', size: 16 }),
+            'This suggestion is out of date — the script it was based on no longer exists. Reject it and ask again.'] }) : null,
+          !proposal.stale && !proposal.base_is_active && ['PENDING', 'BLOCKED'].includes(pStatus) ? jsxs('div', {
+            className: 'gw-callout ' + (proposal.conflict ? 'gw-callout-warn' : 'gw-callout-info'), children: [jsx(Icon, { name: 'alert', size: 16 }),
+              proposal.conflict
+                ? 'This suggestion can no longer be applied: ' + proposal.conflict + '. Reject it and ask for the change again.'
+                : 'Your script changed since this was suggested. Accepting applies it to the current text; only its own scenes change.'] }) : null,
+          (proposal.checks || []).some(c => String(c.status).toUpperCase() !== 'PASS') ? jsx('div', { className: 'gw-checks', children:
+            (proposal.checks || []).filter(c => String(c.status).toUpperCase() !== 'PASS').map((c, i) => jsxs('div', { className: 'gw-check', key: i, children: [
+              jsx(Chip, { kind: statusKind(c.status), children: STATUS_LABEL[String(c.status).toUpperCase()] || c.status }),
+              jsx('span', { className: 'gw-check-name', children: String(c.name).replace(/_/g, ' ').toLowerCase() }),
+              c.detail ? jsx('span', { className: 'gw-muted gw-small', children: c.detail }) : null,
+            ] })) }) : jsxs('div', { className: 'gw-checks-ok', children: [jsx(Icon, { name: 'check', size: 14 }), 'All checks passed: formatting, protected text, cast and length rules.'] }),
+          jsx('div', { className: 'gw-changes', children: (proposal.changes || []).map(c => jsxs('div', { className: 'gw-change', key: c.scene_id || c.heading, children: [
+            jsxs('div', { className: 'gw-change-head', children: [
+              jsx(Chip, { kind: statusKind(c.status), children: STATUS_LABEL[String(c.status).toUpperCase()] || c.status }),
+              jsx('span', { className: 'gw-change-heading', children: c.heading || '(untitled)' }),
+            ] }),
+            jsxs('div', { className: 'gw-diff' + (c.status === 'added' || c.status === 'removed' ? ' gw-diff-single' : ''), children: [
+              c.status !== 'added' ? jsxs('div', { className: 'gw-diff-col gw-diff-before', children: [
+                jsx('div', { className: 'gw-diff-label', children: 'Current' }),
+                jsx('pre', { className: 'gw-pre', children: c.before || '—' }),
+              ] }) : null,
+              c.status !== 'removed' ? jsxs('div', { className: 'gw-diff-col gw-diff-after', children: [
+                jsx('div', { className: 'gw-diff-label', children: 'Suggested' }),
+                jsx('pre', { className: 'gw-pre', children: c.after || '—' }),
+              ] }) : null,
+            ] }),
+          ] })) }),
+        ] }) }),
   ] })
 
   // ---------------- Rules tab ----------------
 
   const rules = data ? data.rules : null
   const rulesTab = !pid || loading || projectFailed
-    ? jsx('div', { className: 'hsp-muted', children: 'Loading rules…' })
+    ? jsx('div', { className: 'gw-loading', children: [jsx('span', { className: 'gw-spinner' }), 'Loading…'] })
     : !rulesForm
-      ? jsx('div', { className: 'hsp-muted', children: 'No rules version recorded for this project yet.' })
-      : jsxs('div', { className: 'hsp-rules', children: [
-          jsx('div', { className: 'hsp-list-label', children: `Rules version ${String(rulesForm.rulesId).slice(0, 12)}… — append-only: saving creates a new version` }),
-          jsxs('div', { className: 'hsp-field', children: [
-            jsx('label', { className: 'hsp-label', children: 'Max number of speeches in the whole script (empty = no limit)' }),
-            jsx('input', { className: 'hsp-input', type: 'number', min: '1', value: rulesForm.dialogueBlockLimit,
-              onChange: (e) => setRulesForm(f => ({ ...f, dialogueBlockLimit: e.target.value })) })
-          ] }),
-          jsxs('div', { className: 'hsp-field', children: [
-            jsx('label', { className: 'hsp-label', children: 'Max pages (empty = no limit)' }),
-            jsx('input', { className: 'hsp-input', type: 'number', min: '1', value: rulesForm.pageLimit,
-              onChange: (e) => setRulesForm(f => ({ ...f, pageLimit: e.target.value })) })
-          ] }),
-          jsxs('div', { className: 'hsp-field', children: [
-            jsx('label', { className: 'hsp-label', children: 'Editorial guidance (one rule per line; interpreted by the model)' }),
-            jsx('textarea', { className: 'hsp-textarea hsp-textarea-small', value: rulesForm.guidance,
-              onChange: (e) => setRulesForm(f => ({ ...f, guidance: e.target.value })) })
-          ] }),
-          rules.allowed_speakers && Array.isArray(rules.allowed_speakers) ? jsxs('div', { className: 'hsp-field', children: [
-            jsx('label', { className: 'hsp-label', children: `Allowed speakers (managed via chat — ${rules.allowed_speakers.length} configured)` }),
-            jsx('pre', { className: 'hsp-pre', children: JSON.stringify(rules.allowed_speakers, null, 1) })
-          ] }) : null,
-          jsxs('div', { className: 'hsp-field', children: [
-            jsx('label', { className: 'hsp-label', children: `Protected passages (${(rulesForm.protected || []).length}) — edits touching these are rejected` }),
-            (rulesForm.protected || []).map((pr, i) => jsxs('div', { className: 'hsp-proto-row', key: i, children: [
-              jsxs('span', { className: 'hsp-hint', children: [
-                jsx('strong', { children: pr.label || '(no label)' }),
-                ` · scene ${String(pr.scene_id).slice(0, 10)}… · offset ${pr.offset_in_scene} · len ${pr.length}`
+      ? emptyState('sliders', 'No rules yet', null)
+      : jsxs('div', { className: 'gw-page-narrow', children: [
+          jsx('h2', { className: 'gw-h2', children: 'Rules' }),
+          jsx('p', { className: 'gw-lead', children: 'Guardrails the assistant follows. Suggestions that break a rule are held back for you to fix.' }),
+          jsxs('div', { className: 'gw-card gw-form', children: [
+            jsx('div', { className: 'gw-form-title', children: 'Length' }),
+            jsxs('div', { className: 'gw-grid2', children: [
+              jsxs('label', { className: 'gw-field', children: [
+                jsx('span', { className: 'gw-label', children: 'Maximum pages' }),
+                jsx('input', { className: 'gw-input', type: 'number', min: '1', placeholder: 'No limit', value: rulesForm.pageLimit,
+                  onChange: (e) => setRulesForm(f => ({ ...f, pageLimit: e.target.value })) }),
+                jsx('span', { className: 'gw-help', children: 'About one minute of screen time per page.' }),
               ] }),
-              jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-ghost',
-                onClick: () => setRulesForm(f => ({ ...f, protected: f.protected.filter((_, j) => j !== i) })),
-                children: 'Remove' })
+              jsxs('label', { className: 'gw-field', children: [
+                jsx('span', { className: 'gw-label', children: 'Maximum speeches' }),
+                jsx('input', { className: 'gw-input', type: 'number', min: '1', placeholder: 'No limit', value: rulesForm.dialogueBlockLimit,
+                  onChange: (e) => setRulesForm(f => ({ ...f, dialogueBlockLimit: e.target.value })) }),
+                jsx('span', { className: 'gw-help', children: 'Across the whole script. Useful for dialogue-light pieces.' }),
+              ] }),
+            ] }),
+          ] }),
+          jsxs('div', { className: 'gw-card gw-form', children: [
+            jsx('div', { className: 'gw-form-title', children: 'Notes for the assistant' }),
+            jsx('textarea', { className: 'gw-input gw-textarea', rows: 5, value: rulesForm.guidance,
+              placeholder: 'One note per line, e.g.\nKeep Maya’s dialogue clipped and dry\nNo voice-over',
+              onChange: (e) => setRulesForm(f => ({ ...f, guidance: e.target.value })) }),
+            rules && Array.isArray(rules.allowed_speakers) ? jsxs('div', { className: 'gw-help', children: [
+              'Cast limited to: ', rules.allowed_speakers.map(x => typeof x === 'string' ? x : x.name).join(', '), ' (set via the assistant).'] }) : null,
+          ] }),
+          jsxs('details', { className: 'gw-card gw-form gw-details', children: [
+            jsxs('summary', { className: 'gw-form-title', children: [jsx(Icon, { name: 'lock', size: 15 }),
+              `Protected passages (${(rulesForm.protected || []).length})`] }),
+            jsx('p', { className: 'gw-help', children: 'Lock a stretch of a scene (by character offset) so no suggestion can change it.' }),
+            (rulesForm.protected || []).map((pr, i) => jsxs('div', { className: 'gw-proto-row', key: i, children: [
+              jsx('strong', { children: pr.label || 'Locked text' }),
+              jsx('span', { className: 'gw-muted gw-small', children: `${(sceneById[pr.scene_id] || {}).heading || pr.scene_id} · characters ${pr.offset_in_scene}–${pr.offset_in_scene + pr.length}` }),
+              jsx('button', { className: 'gw-btn gw-btn-small gw-btn-ghost',
+                onClick: () => setRulesForm(f => ({ ...f, protected: f.protected.filter((_, j) => j !== i) })), children: 'Remove' }),
             ] })),
-            scenes.length > 0 && jsxs('div', { className: 'hsp-proto-add', children: [
-              jsx('select', { className: 'hsp-select', value: rulesForm.addScene,
+            scenes.length > 0 && jsxs('div', { className: 'gw-proto-add', children: [
+              jsx('select', { className: 'gw-input', value: rulesForm.addScene, 'aria-label': 'Scene',
                 onChange: (e) => setRulesForm(f => ({ ...f, addScene: e.target.value })),
                 children: scenes.map(s => jsx('option', { value: s.id, children: s.heading || '(untitled)', key: s.id })) }),
-              jsx('input', { className: 'hsp-input hsp-input-num', type: 'number', min: '0', placeholder: 'offset',
+              jsx('input', { className: 'gw-input gw-input-num', type: 'number', min: '0', title: 'Start offset', 'aria-label': 'Start offset',
                 value: rulesForm.addOffset, onChange: (e) => setRulesForm(f => ({ ...f, addOffset: e.target.value })) }),
-              jsx('input', { className: 'hsp-input hsp-input-num', type: 'number', min: '1', placeholder: 'length',
+              jsx('input', { className: 'gw-input gw-input-num', type: 'number', min: '1', title: 'Length', 'aria-label': 'Length',
                 value: rulesForm.addLength, onChange: (e) => setRulesForm(f => ({ ...f, addLength: e.target.value })) }),
-              jsx('input', { className: 'hsp-input', type: 'text', placeholder: 'label', style: { flex: 1, minWidth: 100 },
+              jsx('input', { className: 'gw-input', type: 'text', placeholder: 'Label', style: { flex: 1, minWidth: 100 },
                 value: rulesForm.addLabel, onChange: (e) => setRulesForm(f => ({ ...f, addLabel: e.target.value })) }),
-              jsx('button', { className: 'hsp-btn hsp-btn-small', onClick: () => setRulesForm(f => ({
-                ...f,
-                protected: [...(f.protected || []), {
-                  scene_id: f.addScene,
-                  offset_in_scene: Number(f.addOffset) || 0,
-                  length: Number(f.addLength) || 0,
-                  label: f.addLabel || ''
-                }]
-              })), children: 'Add' })
-            ] })
+              jsx('button', { className: 'gw-btn gw-btn-small', onClick: () => setRulesForm(f => ({
+                ...f, protected: [...(f.protected || []), { scene_id: f.addScene, offset_in_scene: Number(f.addOffset) || 0,
+                  length: Number(f.addLength) || 0, label: f.addLabel || '' }] })), children: 'Add' }),
+            ] }),
           ] }),
-          jsxs('div', { className: 'hsp-actions', children: [
-            jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy, onClick: () => doSaveRules(), children: busy ? 'Saving…' : 'Save rules' }),
-            jsx('span', { className: 'hsp-hint', children: 'Saving rules invalidates pending proposals (RULES_CHANGED).' })
-          ] })
+          jsx('div', { className: 'gw-row gw-row-end', children:
+            jsx('button', { className: 'gw-btn gw-btn-primary', disabled: busy, onClick: () => doSaveRules(), children: busy ? 'Saving…' : 'Save rules' }) }),
         ] })
 
   // ---------------- History tab ----------------
 
   const hist = (historyQ.data && Array.isArray(historyQ.data)) ? historyQ.data : []
-  const historyTab = !pid ? null : jsxs('div', { className: 'hsp-history', children: [
-    jsxs('div', { className: 'hsp-actions', children: [
-      jsx('button', { className: 'hsp-btn', disabled: busy,
-        onClick: () => (confirmId === 'undo' ? doUndo() : setConfirmId('undo')),
-        children: confirmId === 'undo' ? 'Confirm undo last change' : 'Undo last change' })
-    ] }),
-    jsx('div', { className: 'hsp-list-label', children: historyQ.isPending ? 'Loading history…' : `${hist.length} revision${hist.length === 1 ? '' : 's'} (immutable — restore creates a new one)` }),
-    jsx('div', { className: 'hsp-list', children: hist.map(r => jsxs('div', { className: 'hsp-hist-row', key: r.id, children: [
-      jsxs('div', { className: 'hsp-row-main', children: [
-        jsxs('div', { className: 'hsp-row-title', children: [
-          String((r.origin || 'revision').toLowerCase().replace('_', ' ')),
-          r.is_active ? '  ·  active' : null
-        ] }),
-        jsxs('div', { className: 'hsp-row-meta', children: [
-          fmtTime(r.created_at),
-          ` · ${r.scene_count} scenes · ${String(r.content_hash || '').slice(0, 8)}`
-        ] })
+  const historyTab = !pid ? null : jsxs('div', { className: 'gw-page-narrow', children: [
+    jsxs('div', { className: 'gw-heading-row', children: [
+      jsxs('div', { children: [
+        jsx('h2', { className: 'gw-h2', children: 'History' }),
+        jsx('p', { className: 'gw-lead', children: 'Every change is kept. Restoring an older version adds it on top — nothing is ever lost.' }),
       ] }),
-      r.is_active
-        ? null
-        : jsxs('div', { className: 'hsp-actions', children: [
-            confirmId === r.id
-              ? jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-primary', disabled: busy,
-                  onClick: () => doRestore(r.id), children: 'Confirm restore' })
-              : jsx('button', { className: 'hsp-btn hsp-btn-small', disabled: busy,
-                  onClick: () => setConfirmId(r.id), children: 'Restore' })
-          ] })
-    ] })) }),
-    confirmId ? jsx('div', { className: 'hsp-hint', children: 'Click the confirm button to apply, or take another action to cancel.' }) : null
+      confirmId === 'undo'
+        ? jsxs('div', { className: 'gw-row', children: [
+            jsx('button', { className: 'gw-btn', onClick: () => setConfirmId(null), children: 'Cancel' }),
+            jsx('button', { className: 'gw-btn gw-btn-primary', disabled: busy, onClick: () => doUndo(), children: 'Undo last change' }) ] })
+        : jsxs('button', { className: 'gw-btn', disabled: busy || hist.length < 2, onClick: () => setConfirmId('undo'),
+            children: [jsx(Icon, { name: 'undo', size: 15 }), 'Undo last change'] }),
+    ] }),
+    historyQ.isPending ? jsx('div', { className: 'gw-loading', children: [jsx('span', { className: 'gw-spinner' }), 'Loading…'] }) : null,
+    jsx('ol', { className: 'gw-timeline', children: hist.map(r => {
+      const o = ORIGINS[r.origin] || { label: String(r.origin || 'Revision').replace('_', ' '), icon: 'file' }
+      return jsxs('li', { className: 'gw-tl-item' + (r.is_active ? ' gw-tl-active' : ''), key: r.id, children: [
+        jsx('span', { className: 'gw-tl-dot', children: jsx(Icon, { name: o.icon, size: 14 }) }),
+        jsxs('div', { className: 'gw-tl-body', children: [
+          jsxs('div', { className: 'gw-tl-title', children: [o.label, r.is_active ? jsx(Chip, { kind: 'good', children: 'Current' }) : null] }),
+          jsx('div', { className: 'gw-muted gw-small', title: fmtTime(r.created_at), children:
+            `${relTime(r.created_at)} · ${r.scene_count} scene${r.scene_count === 1 ? '' : 's'}` }),
+        ] }),
+        r.is_active ? null : confirmId === r.id
+          ? jsxs('div', { className: 'gw-row', children: [
+              jsx('button', { className: 'gw-btn gw-btn-small', onClick: () => setConfirmId(null), children: 'Cancel' }),
+              jsx('button', { className: 'gw-btn gw-btn-small gw-btn-primary', disabled: busy, onClick: () => doRestore(r.id), children: 'Restore this version' }) ] })
+          : jsx('button', { className: 'gw-btn gw-btn-small gw-btn-ghost', disabled: busy, onClick: () => setConfirmId(r.id), children: 'Restore' }),
+      ] })
+    }) }),
   ] })
 
   // ---------------- Export tab ----------------
 
-  const exportTab = !pid ? null : jsxs('div', { className: 'hsp-export', children: [
-    jsxs('div', { className: 'hsp-actions', children: [
-      jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy || !!(pdf && pdf.loading), onClick: () => doExport(),
-        children: pdf && pdf.loading ? 'Rendering…' : 'Export current revision to PDF' })
-    ] }),
-    pdf && pdf.error ? jsx('div', { className: 'hsp-notice hsp-notice-err', children:
-      `Renderer unavailable: ${pdf.error}` }) : null,
-    pdf && pdf.meta && jsxs('div', { className: 'hsp-export-result', children: [
-      jsx('div', { className: 'hsp-list-label', children:
-        `Exported ${pdf.meta.page_count} page${pdf.meta.page_count === 1 ? '' : 's'} · ${pdf.meta.size_bytes} bytes · ${pdf.meta.filename}` }),
-      pdf.dataUrl
-        ? jsxs('div', { className: 'hsp-pdf-wrap', children: [
-            jsx('iframe', { className: 'hsp-pdf', src: pdf.dataUrl, title: `PDF: ${pdf.meta.filename}` }),
-            jsxs('div', { className: 'hsp-actions', children: [
-              jsx('a', { className: 'hsp-btn hsp-btn-small', href: pdf.dataUrl, download: pdf.meta.filename, children: 'Download PDF' }),
-              jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-ghost', onClick: () => setPdf(null), children: 'Close' })
-            ] })
-          ] })
-        : jsxs('div', { className: 'hsp-actions', children: [
-          jsx('span', { className: 'hsp-hint', children:
-            `Rendered at ${pdf.meta.path}${pdf.error ? ` — embedded view unavailable: ${pdf.error}` : ''}` }),
-          jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-ghost', onClick: () => setPdf(null), children: 'Dismiss' })
-        ] })
-    ] }),
-    jsxs('div', { className: 'hsp-export-fountain', children: [
-      jsx('div', { className: 'hsp-list-label', children:
-        'Fountain (.fountain) — opens in Fountain, Final Draft, Highland, or any Fountain-compatible tool' }),
-      jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy, onClick: () => doExportFountain(),
-        children: busy ? 'Preparing…' : 'Export current revision as Fountain' })
-    ] }),
-    jsxs('div', { className: 'hsp-export-fountain', children: [
-      jsx('div', { className: 'hsp-list-label', children: 'Final Draft (.fdx) — opens in Final Draft, WriterDuet, Fade In, Highland' }),
-      jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy, onClick: () => doExportFdx(),
-        children: busy ? 'Preparing…' : 'Export current revision as Final Draft' })
-    ] })
+  const exportCard = (icon, title, text, button, onClick, primary) => jsxs('div', { className: 'gw-card gw-export-card', children: [
+    jsx('div', { className: 'gw-export-icon', children: jsx(Icon, { name: icon, size: 20 }) }),
+    jsx('div', { className: 'gw-export-title', children: title }),
+    jsx('div', { className: 'gw-muted gw-small gw-grow', children: text }),
+    jsx('button', { className: 'gw-btn ' + (primary ? 'gw-btn-primary' : ''), disabled: busy || !!(pdf && pdf.loading), onClick, children: button }),
   ] })
+  const exportTab = !pid ? null : jsxs('div', { className: 'gw-page-wide', children: [
+    jsx('h2', { className: 'gw-h2', children: 'Export' }),
+    jsx('p', { className: 'gw-lead', children: 'Share your script or take it to other screenwriting software.' }),
+    jsxs('div', { className: 'gw-export-grid', children: [
+      exportCard('page', 'PDF', 'Industry-standard pages: Courier 12, standard margins, page numbers, title page.',
+        pdf && pdf.loading ? 'Rendering…' : 'Create PDF', () => doExport(), true),
+      exportCard('film', 'Final Draft', 'An .fdx file for Final Draft, WriterDuet, Fade In and Highland.', 'Download .fdx', () => doExportFdx()),
+      exportCard('code', 'Fountain', 'Plain-text screenplay (.fountain) — open in any Fountain app or text editor.', 'Download .fountain', () => doExportFountain()),
+    ] }),
+    pdf && pdf.error && !pdf.meta ? jsxs('div', { className: 'gw-callout gw-callout-warn', children: [jsx(Icon, { name: 'alert', size: 16 }), `PDF export failed: ${pdf.error}`] }) : null,
+    pdf && pdf.meta ? jsxs('div', { className: 'gw-card gw-pdf-card', children: [
+      jsxs('div', { className: 'gw-heading-row', children: [
+        jsxs('div', { children: [
+          jsx('div', { className: 'gw-export-title', children: pdf.meta.filename }),
+          jsx('div', { className: 'gw-muted gw-small', children: `${pdf.meta.page_count} page${pdf.meta.page_count === 1 ? '' : 's'} · ${Math.max(1, Math.round((pdf.meta.size_bytes || 0) / 1024))} KB` }),
+        ] }),
+        jsxs('div', { className: 'gw-row', children: [
+          pdf.dataUrl ? jsxs('a', { className: 'gw-btn gw-btn-primary', href: pdf.dataUrl, download: pdf.meta.filename, children: [jsx(Icon, { name: 'download', size: 15 }), 'Download'] }) : null,
+          iconBtn('x', 'Close preview', () => setPdf(null)),
+        ] }),
+      ] }),
+      pdf.dataUrl
+        ? jsx('iframe', { className: 'gw-pdf', src: pdf.dataUrl, title: `PDF: ${pdf.meta.filename}` })
+        : jsx('div', { className: 'gw-muted gw-small', children: `Saved to ${pdf.meta.path}${pdf.error ? ` (preview unavailable: ${pdf.error})` : ''}` }),
+    ] }) : null,
+  ] })
+
+  // ---------------- Welcome / dialogs ----------------
+
+  const welcome = jsxs('div', { className: 'gw-welcome', children: [
+    jsx('div', { className: 'gw-welcome-mark', children: jsx(Icon, { name: 'quill', size: 28 }) }),
+    jsx('h1', { className: 'gw-welcome-title', children: 'Write your screenplay with an AI partner' }),
+    jsx('p', { className: 'gw-welcome-text', children: 'Describe a scene in plain words. Ghostwriter writes it in proper screenplay format, keeps every version, and exports to PDF and Final Draft.' }),
+    jsxs('div', { className: 'gw-welcome-cards', children: [
+      jsxs('button', { className: 'gw-card gw-welcome-card', onClick: () => setNewProject({ title: '', author: '', format: 'screenplay', text: '' }), children: [
+        jsx('span', { className: 'gw-export-icon', children: jsx(Icon, { name: 'plus', size: 20 }) }),
+        jsx('span', { className: 'gw-export-title', children: 'New screenplay' }),
+        jsx('span', { className: 'gw-muted gw-small', children: 'Start from a blank page.' }) ] }),
+      jsxs('label', { className: 'gw-card gw-welcome-card', children: [
+        jsx('span', { className: 'gw-export-icon', children: jsx(Icon, { name: 'upload', size: 20 }) }),
+        jsx('span', { className: 'gw-export-title', children: 'Import a script' }),
+        jsx('span', { className: 'gw-muted gw-small', children: 'Fountain, Final Draft (.fdx) or PDF.' }),
+        jsx('input', { type: 'file', accept: '.fountain,.spmd,.fdx,.pdf,.txt,.text,.md,text/plain,application/pdf', style: { display: 'none' }, onChange: onImportFile }) ] }),
+      jsxs('button', { className: 'gw-card gw-welcome-card', disabled: busy, onClick: () => doCreateSample(), children: [
+        jsx('span', { className: 'gw-export-icon', children: jsx(Icon, { name: 'book', size: 20 }) }),
+        jsx('span', { className: 'gw-export-title', children: 'Open a sample' }),
+        jsx('span', { className: 'gw-muted gw-small', children: `“${SAMPLE_TITLE}”, a short scene to explore.` }) ] }),
+    ] }),
+  ] })
+
+  const importDialog = importPanel ? jsx(Modal, {
+    title: 'Import a script', onClose: busy ? null : () => setImportPanel(null),
+    footer: [
+      jsx('button', { className: 'gw-btn', key: 'c', disabled: busy, onClick: () => setImportPanel(null), children: 'Cancel' }),
+      jsx('button', { className: 'gw-btn gw-btn-primary', key: 'i', disabled: busy, onClick: () => doImport(), children: busy ? 'Importing…' : 'Import' }),
+    ],
+    children: [
+      jsxs('div', { className: 'gw-file-pill', key: 'f', children: [jsx(Icon, { name: 'file', size: 16 }), importPanel.name] }),
+      jsxs('div', { className: 'gw-grid2', key: 'g', children: [
+        jsxs('label', { className: 'gw-field', children: [jsx('span', { className: 'gw-label', children: 'Title' }),
+          jsx('input', { className: 'gw-input', value: importPanel.title, placeholder: 'From the file’s title page', onChange: (e) => setImportPanel({ ...importPanel, title: e.target.value }) })] }),
+        jsxs('label', { className: 'gw-field', children: [jsx('span', { className: 'gw-label', children: 'Author' }),
+          jsx('input', { className: 'gw-input', value: importPanel.author, placeholder: 'From the file’s title page', onChange: (e) => setImportPanel({ ...importPanel, author: e.target.value }) })] }),
+      ] }),
+      importPanel.isPdf
+        ? jsx('div', { className: 'gw-help', key: 'h', children: 'The text is read from the PDF and rebuilt as a screenplay. Unusual layouts may need a quick tidy-up afterwards.' })
+        : (importPanel.preview ? jsx('pre', { className: 'gw-pre gw-preview', key: 'p', children: importPanel.preview.slice(0, 600) + (importPanel.preview.length > 600 ? ' …' : '') }) : null),
+    ] }) : null
+
+  const newDialog = newProject ? jsx(Modal, {
+    title: 'New screenplay', onClose: busy ? null : () => setNewProject(null),
+    footer: [
+      jsx('button', { className: 'gw-btn', key: 'c', disabled: busy, onClick: () => setNewProject(null), children: 'Cancel' }),
+      jsx('button', { className: 'gw-btn gw-btn-primary', key: 'n', disabled: busy || !(newProject.title || '').trim(), onClick: () => doNewProject(), children: busy ? 'Creating…' : 'Create' }),
+    ],
+    children: [
+      jsxs('div', { className: 'gw-grid2', key: 'g', children: [
+        jsxs('label', { className: 'gw-field', children: [jsx('span', { className: 'gw-label', children: 'Title' }),
+          jsx('input', { className: 'gw-input', autoFocus: true, value: newProject.title, placeholder: 'My screenplay',
+            onChange: (e) => setNewProject({ ...newProject, title: e.target.value }),
+            onKeyDown: (e) => { if (e.key === 'Enter' && (newProject.title || '').trim()) doNewProject() } })] }),
+        jsxs('label', { className: 'gw-field', children: [jsx('span', { className: 'gw-label', children: 'Author' }),
+          jsx('input', { className: 'gw-input', value: newProject.author, placeholder: 'Optional',
+            onChange: (e) => setNewProject({ ...newProject, author: e.target.value }) })] }),
+      ] }),
+      jsxs('details', { className: 'gw-details-plain', key: 'd', children: [
+        jsx('summary', { children: 'Paste existing Fountain text (optional)' }),
+        jsx('textarea', { className: 'gw-input gw-textarea gw-mono', rows: 6, value: newProject.text, placeholder: 'INT. DINER - NIGHT\n\n…',
+          onChange: (e) => setNewProject({ ...newProject, text: e.target.value }) }),
+      ] }),
+    ] }) : null
+
+  const deleteDialog = confirmDelete ? jsx(Modal, {
+    title: 'Delete project?', onClose: busy ? null : () => setConfirmDelete(null),
+    footer: [
+      jsx('button', { className: 'gw-btn', key: 'c', disabled: busy, onClick: () => setConfirmDelete(null), children: 'Cancel' }),
+      jsx('button', { className: 'gw-btn gw-btn-danger', key: 'd', disabled: busy, onClick: () => doDeleteProject(confirmDelete), children: busy ? 'Deleting…' : 'Delete permanently' }),
+    ],
+    children: jsx('p', { className: 'gw-modal-text', children: `“${((projects.find(p => p.id === confirmDelete) || {}).title) || 'This project'}” and its whole history will be permanently deleted. Export it first if you want to keep a copy.` }),
+  }) : null
+
+  const guardDialog = guard ? jsx(Modal, {
+    title: 'Unsaved changes', onClose: () => setGuard(null),
+    footer: [
+      jsx('button', { className: 'gw-btn gw-btn-ghost', key: 'x', onClick: () => setGuard(null), children: 'Keep editing' }),
+      jsx('button', { className: 'gw-btn', key: 'd', disabled: busy, onClick: () => { const n = guard.next; setDraft(null); setEditing(false); setGuard(null); n() }, children: 'Discard' }),
+      jsx('button', { className: 'gw-btn gw-btn-primary', key: 's', disabled: busy, onClick: async () => { const ok = await doSaveDoc(); if (ok) { const n = guard.next; setGuard(null); n() } }, children: 'Save and continue' }),
+    ],
+    children: jsx('p', { className: 'gw-modal-text', children: `You have unsaved edits${guard.label ? ' — save them before ' + guard.label : ''}?` }),
+  }) : null
 
   const emptyProjects = !failed && projectsQ.data && projects.length === 0
   const connecting = !failed && !projectsQ.data && projectsQ.isPending
 
-  const importPanelEl = importPanel ? jsxs('div', { className: 'hsp-import', children: [
-    jsxs('div', { className: 'hsp-import-head', children: [
-      jsx('span', { className: 'hsp-import-title', children: 'Import screenplay file' }),
-      jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-ghost', disabled: busy, onClick: () => setImportPanel(null), children: '✕' })
-    ] }),
-    jsx('div', { className: 'hsp-hint', children: `File: ${importPanel.name} · ${importPanel.isPdf ? 'PDF (text will be extracted)' : 'text (Fountain / Final Draft / plain text)'}` }),
-    jsxs('div', { className: 'hsp-import-field', children: [
-      jsx('label', { children: 'Title' }),
-      jsx('input', { className: 'hsp-input', value: importPanel.title, placeholder: 'From the file’s title page', onChange: (e) => setImportPanel({ ...importPanel, title: e.target.value }) })
-    ] }),
-    jsxs('div', { className: 'hsp-import-field', children: [
-      jsx('label', { children: 'Author' }),
-      jsx('input', { className: 'hsp-input', value: importPanel.author, placeholder: 'From the file’s title page', onChange: (e) => setImportPanel({ ...importPanel, author: e.target.value }) })
-    ] }),
-    (importPanel.isPdf)
-      ? jsx('div', { className: 'hsp-hint', children: 'PDF detected — text will be extracted and re-structured into Fountain on import. Complex layouts may need a light cleanup in the Script tab afterward.' })
-      : jsx('pre', { className: 'hsp-raw hsp-import-preview', children:
-          (importPanel.preview || '').slice(0, 500) + ((importPanel.preview || '').length > 500 ? ' …' : '') }),
-    jsxs('div', { className: 'hsp-actions', children: [
-      jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy, onClick: () => doImport(),
-        children: busy ? 'Importing…' : 'Import as new project' }),
-      jsx('button', { className: 'hsp-btn', disabled: busy, onClick: () => setImportPanel(null), children: 'Cancel' })
-    ] })
-  ] }) : null
-
-  const newProjectEl = newProject ? jsxs('div', { className: 'hsp-import', children: [
-    jsxs('div', { className: 'hsp-import-head', children: [
-      jsx('span', { className: 'hsp-import-title', children: 'New project' }),
-      jsx('button', { className: 'hsp-btn hsp-btn-small hsp-btn-ghost', disabled: busy, onClick: () => setNewProject(null), children: '✕' })
-    ] }),
-    jsx('div', { className: 'hsp-hint', children: 'Start from scratch — no file needed. Paste Fountain, or leave it blank and build it in chat.' }),
-    jsxs('div', { className: 'hsp-import-field', children: [
-      jsx('label', { children: 'Title' }),
-      jsx('input', { className: 'hsp-input', autoFocus: true, value: newProject.title, placeholder: 'My screenplay', onChange: (e) => setNewProject({ ...newProject, title: e.target.value }) })
-    ] }),
-    jsxs('div', { className: 'hsp-import-field', children: [
-      jsx('label', { children: 'Author' }),
-      jsx('input', { className: 'hsp-input', value: newProject.author, placeholder: 'Optional', onChange: (e) => setNewProject({ ...newProject, author: e.target.value }) })
-    ] }),
-    jsxs('div', { className: 'hsp-import-field', children: [
-      jsx('label', { children: 'Initial text (optional — leave blank to start empty)' }),
-      jsx('textarea', { className: 'hsp-textarea hsp-textarea-small', value: newProject.text, placeholder: 'Paste Fountain…', onChange: (e) => setNewProject({ ...newProject, text: e.target.value }) })
-    ] }),
-    jsxs('div', { className: 'hsp-actions', children: [
-      jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy || !(newProject.title || '').trim(), onClick: () => doNewProject(),
-        children: busy ? 'Creating…' : 'Create project' }),
-      jsx('button', { className: 'hsp-btn', disabled: busy, onClick: () => setNewProject(null), children: 'Cancel' })
-    ] })
-  ] }) : null
-
   return jsx(SearchCtx.Provider, { value: searchState, children: jsxs('div', {
-    className: 'hsp-pane' + (focusMode ? ' hsp-pane-focus' : ''),
+    className: 'gw-root hsp-pane' + (focusMode ? ' gw-focus' : ''), ref: rootRef, 'data-theme': theme,
     style: {
-      '--gw-ui': FONTS.ui,
       '--gw-font': FONTS.script,
-      '--gw-size': (Number.isFinite(Number(view.size)) ? Number(view.size) : 13) + 'px',
+      '--gw-size': view.size + 'px',
+      // Courier is 0.6em per character; a page is 85 characters wide.
+      '--gw-page-w': Math.round(view.size * 0.6 * 85 + 2) + 'px',
       '--gw-paper': (PAPER[view.paper] || PAPER.blue).bg,
     },
     children: [
-    topbar,
-    noticeEl,
-    importPanelEl,
-    newProjectEl,
-    failed
-      ? jsxs('div', { className: 'hsp-error', children: [
-          jsx('div', { children: `Backend error: ${String((projectsQ.error && projectsQ.error.message) || projectsQ.error)}` }),
-          jsx('button', { className: 'hsp-btn', onClick: () => projectsQ.refetch(), children: 'Retry' })
-        ] })
-      : emptyProjects
-        ? jsxs('div', { className: 'hsp-empty', children: [
-            jsx('div', { children: 'No projects yet.' }),
-            jsx('button', { className: 'hsp-btn hsp-btn-primary', onClick: () => setNewProject({ title: '', author: '', format: 'screenplay', text: '' }), children: '+ New project' }),
-            jsx('div', { className: 'hsp-hint', children: 'Or create one in chat — e.g. “create a screenplay project called X” or “import this Fountain file: …”.' })
-          ] })
-        : connecting
-          ? jsx('div', { className: 'hsp-muted', children: 'Connecting…' })
-          : !pid
-            ? jsx('div', { className: 'hsp-muted', children: 'Selecting a project…' })
-            : jsxs('div', { className: 'hsp-tabbody', children: [
-                tab === 'script' ? scriptTab : null,
-                tab === 'proposals' ? proposalsTab : null,
-                tab === 'rules' ? rulesTab : null,
-                tab === 'history' ? historyTab : null,
-                tab === 'export' ? exportTab : null
-              ] }),
-    confirmDelete && jsxs('div', { className: 'hsp-guard', children: [
-      jsxs('div', { className: 'hsp-guard-box', children: [
-        jsx('div', { className: 'hsp-guard-title', children: 'Delete project?' }),
-        jsx('div', { className: 'hsp-guard-text', children:
-          `“${((projects.find(p => p.id === confirmDelete) || {}).title) || confirmDelete}” and its whole revision history will be permanently deleted. Export it first if you want a copy.` }),
-        jsxs('div', { className: 'hsp-guard-actions', children: [
-          jsx('button', { className: 'hsp-btn hsp-btn-danger', disabled: busy, onClick: () => doDeleteProject(confirmDelete), children: busy ? 'Deleting…' : 'Delete permanently' }),
-          jsx('button', { className: 'hsp-btn hsp-btn-ghost', disabled: busy, onClick: () => setConfirmDelete(null), children: 'Cancel' })
-        ] })
-      ] })
-    ] }),
-    guard && jsxs('div', { className: 'hsp-guard', children: [
-      jsxs('div', { className: 'hsp-guard-box', children: [
-        jsx('div', { className: 'hsp-guard-title', children: 'Unsaved changes' }),
-        jsx('div', { className: 'hsp-guard-text', children:
-          `You have unsaved edits in the document editor. ${guard.label ? guard.label + '. ' : ''}Save or discard them first.` }),
-        jsxs('div', { className: 'hsp-guard-actions', children: [
-          jsx('button', { className: 'hsp-btn hsp-btn-primary', disabled: busy,
-            onClick: async () => {
-              const ok = await doSaveDoc()
-              if (ok) { const n = guard.next; setGuard(null); n() }
-            },
-            children: 'Save changes' }),
-          jsx('button', { className: 'hsp-btn', disabled: busy,
-            onClick: () => { const n = guard.next; setDraft(null); setEditing(false); setGuard(null); n() },
-            children: 'Discard' }),
-          jsx('button', { className: 'hsp-btn hsp-btn-ghost', onClick: () => setGuard(null), children: 'Cancel' })
-        ] })
-      ] })
-    ] })
-  ] }) })
+      topbar,
+      jsx('main', { className: 'gw-main', children: failed
+        ? emptyState('alert', 'Ghostwriter can’t reach its backend', String((projectsQ.error && projectsQ.error.message) || projectsQ.error),
+            jsx('button', { className: 'gw-btn', onClick: () => projectsQ.refetch(), children: 'Try again' }))
+        : emptyProjects ? welcome
+        : connecting || !pid ? jsx('div', { className: 'gw-loading', children: [jsx('span', { className: 'gw-spinner' }), 'Loading…'] })
+        : [
+            tab === 'script' ? jsx('div', { className: 'gw-tab gw-tab-script', key: 's', children: scriptTab }) : null,
+            tab === 'proposals' ? jsx('div', { className: 'gw-tab', key: 'p', children: proposalsTab }) : null,
+            tab === 'rules' ? jsx('div', { className: 'gw-tab gw-scroll', key: 'r', children: rulesTab }) : null,
+            tab === 'history' ? jsx('div', { className: 'gw-tab gw-scroll', key: 'h', children: historyTab }) : null,
+            tab === 'export' ? jsx('div', { className: 'gw-tab gw-scroll', key: 'e', children: exportTab }) : null,
+          ] }),
+      toast, importDialog, newDialog, deleteDialog, guardDialog,
+    ] }) })
 }
 
 const CSS = `
 /* ---- Self-hosted manuscript font (Courier Prime, latin, SIL OFL) ---- */
-
 @font-face { font-family:'Courier Prime'; font-style:normal; font-weight:400; font-display:block; src:url(data:font/woff2;base64,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) format('woff2'); }
-
 @font-face { font-family:'Courier Prime'; font-style:normal; font-weight:700; font-display:block; src:url(data:font/woff2;base64,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) format('woff2'); }
+/* ================= Ghostwriter design system =================
+   Colours derive from the host's text colour (currentColor), so the chrome
+   follows a light or dark Hermes theme; the page itself is always paper. */
+.gw-root {
+  --gw-accent: #7c6cf2; --gw-accent-strong: #6a58ea; --gw-accent-soft: color-mix(in oklab, #7c6cf2 16%, transparent);
+  --gw-good: #2fae76; --gw-warn: #d99a2b; --gw-bad: #e5534b;
+  --gw-line: color-mix(in oklab, currentColor 11%, transparent);
+  --gw-line-strong: color-mix(in oklab, currentColor 20%, transparent);
+  --gw-soft: color-mix(in oklab, currentColor 4%, transparent);
+  --gw-soft-2: color-mix(in oklab, currentColor 7%, transparent);
+  --gw-muted: color-mix(in oklab, currentColor 58%, transparent);
+  --gw-ink: #1d2030;
+  --gw-surface: #ffffff; --gw-surface-fg: #1d2030; --gw-field: #ffffff;
+  --gw-radius: 10px; --gw-radius-sm: 7px;
+  --gw-shadow: 0 1px 2px rgba(0,0,0,.12), 0 8px 24px rgba(0,0,0,.16);
+  --gw-ui-font: "Inter", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  display: flex; flex-direction: column; height: 100%; min-height: 0; box-sizing: border-box; overflow: hidden;
+  font-family: var(--gw-ui-font); font-size: 13px; line-height: 1.45; -webkit-font-smoothing: antialiased; position: relative;
+}
+.gw-root *, .gw-root *::before, .gw-root *::after { box-sizing: border-box; }
+.gw-root button, .gw-root input, .gw-root textarea, .gw-root select { font: inherit; color: inherit; }
+.gw-root :focus-visible { outline: 2px solid var(--gw-accent); outline-offset: 2px; }
+.gw-root input:focus-visible, .gw-root textarea:focus-visible, .gw-root select:focus-visible { outline: none; }
+.gw-icon { flex: none; display: block; }
+.gw-muted { color: var(--gw-muted); }
+.gw-small { font-size: 12px; }
+.gw-pad { padding: 14px; }
+.gw-grow { flex: 1; }
+.gw-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gw-row-end { justify-content: flex-end; }
+.gw-mono { font-family: var(--gw-font, 'Courier Prime', monospace); }
 
-.hsp-pane { display: flex; flex-direction: column; gap: 8px; padding: 12px; font-size: 13px; height: 100%; box-sizing: border-box; overflow: hidden; }
-.hsp-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.hsp-header-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.hsp-title { font-weight: 650; font-size: 15px; }
-.hsp-sub { opacity: 0.65; font-size: 12px; }
-.hsp-select { width: 100%; padding: 6px 8px; border-radius: 8px; border: 1px solid color-mix(in oklab, currentColor 30%, transparent); background: transparent; color: inherit; font-size: 13px; }
-.hsp-tabs { display: flex; gap: 2px; border-bottom: 1px solid color-mix(in oklab, currentColor 15%, transparent); }
-.hsp-tab { appearance: none; background: transparent; border: none; color: inherit; opacity: 0.6; padding: 6px 10px; font-size: 12.5px; cursor: pointer; border-radius: 6px 6px 0 0; display: flex; align-items: center; gap: 5px; }
-.hsp-tab:hover { opacity: 0.85; }
-.hsp-tab-active { opacity: 1; font-weight: 600; box-shadow: inset 0 -2px 0 currentColor; }
-.hsp-badge { background: color-mix(in oklab, currentColor 18%, transparent); border-radius: 9px; padding: 0 6px; font-size: 11px; }
-.hsp-dot { color: #f0b429; font-size: 9px; }
-.hsp-tabbody { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
-.hsp-muted { opacity: 0.6; padding: 8px 2px; font-size: 12.5px; }
-.hsp-empty { opacity: 0.75; padding: 10px 4px; font-size: 12.5px; line-height: 1.5; }
-.hsp-error { color: #ff9c9c; background: color-mix(in oklab, #ff7676 12%, transparent); padding: 8px 10px; border-radius: 8px; font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
-.hsp-notice { padding: 8px 10px; border-radius: 8px; font-size: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.hsp-import { border: 1px solid color-mix(in oklab, currentColor 18%, transparent); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; background: color-mix(in oklab, currentColor 3%, transparent); }
-.hsp-import-head { display: flex; align-items: center; justify-content: space-between; }
-.hsp-import-title { font-weight: 650; }
-.hsp-import-field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
-.hsp-import-field label { opacity: 0.6; }
-.hsp-input { padding: 5px 8px; border-radius: 7px; border: 1px solid color-mix(in oklab, currentColor 20%, transparent); background: transparent; color: inherit; font-size: 12.5px; }
-.hsp-import-preview { margin: 0; max-height: 120px; overflow: auto; font-size: 11px; opacity: 0.7; white-space: pre-wrap; font-family: ui-monospace, monospace; }
-.hsp-export-fountain { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; margin-top: 4px; border-top: 1px solid color-mix(in oklab, currentColor 12%, transparent); }
-.hsp-notice-ok { background: color-mix(in oklab, #4cc38a 16%, transparent); }
-.hsp-notice-err { background: color-mix(in oklab, #ff7676 14%, transparent); }
-.hsp-list-label { opacity: 0.65; font-size: 11.5px; padding: 4px 2px; }
-.hsp-list { display: flex; flex-direction: column; gap: 4px; }
-.hsp-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; text-align: left; padding: 8px 10px; border-radius: 8px; border: 1px solid color-mix(in oklab, currentColor 12%, transparent); background: transparent; color: inherit; cursor: pointer; font-size: 13px; }
-.hsp-row:hover { background: color-mix(in oklab, currentColor 8%, transparent); }
-.hsp-row-active { border-color: currentColor; background: color-mix(in oklab, currentColor 10%, transparent); }
-.hsp-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.hsp-row-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hsp-row-meta { opacity: 0.6; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hsp-chip { display: inline-block; border-radius: 9px; padding: 1px 8px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
-.hsp-chip-pending { background: color-mix(in oklab, #f0b429 22%, transparent); }
-.hsp-chip-blocked, .hsp-chip-stale, .hsp-chip-bad { background: color-mix(in oklab, #ff7676 24%, transparent); }
-.hsp-chip-accepted, .hsp-chip-good { background: color-mix(in oklab, #4cc38a 24%, transparent); }
-.hsp-chip-rejected, .hsp-chip-muted { background: color-mix(in oklab, currentColor 14%, transparent); }
-.hsp-chip-warn { background: color-mix(in oklab, #f0b429 20%, transparent); }
-.hsp-script { display: grid; grid-template-columns: 160px minmax(0,1fr); grid-template-rows: minmax(0,1fr); gap: 10px; flex: 1; min-height: 0; }
-.hsp-nav { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; min-height: 0; }
-.hsp-nav-row { appearance: none; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 5px 7px; color: inherit; cursor: pointer; font-size: 12px; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
-.hsp-nav-row:hover { background: color-mix(in oklab, currentColor 8%, transparent); }
-.hsp-nav-active { border-color: color-mix(in oklab, currentColor 30%, transparent); background: color-mix(in oklab, currentColor 8%, transparent); }
-.hsp-nav-text { display: flex; gap: 6px; align-items: baseline; min-width: 0; overflow: hidden; }
-.hsp-nav-idx { opacity: 0.5; font-size: 10.5px; flex: none; }
-.hsp-nav-text span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hsp-scenearea { min-width: 0; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
-.hsp-scenehead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.hsp-scenehead-title { font-weight: 650; font-size: 13px; }
-.hsp-reading { border: 1px solid color-mix(in oklab, currentColor 12%, transparent); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
-.hsp-scene-title { font-weight: 650; font-size: 12px; opacity: 0.85; border-bottom: 1px solid color-mix(in oklab, currentColor 15%, transparent); padding-bottom: 6px; }
-.hsp-scene { display: flex; flex-direction: column; gap: 7px; font-family: 'Courier New', ui-monospace, monospace; font-size: 12.5px; line-height: 1.45; }
-.hsp-full { flex: 1; min-height: 0; overflow-y: auto; border: 1px solid color-mix(in oklab, currentColor 12%, transparent); border-radius: 10px; padding: 6px 14px; display: flex; flex-direction: column; }
-.hsp-full-scene { display: flex; flex-direction: column; gap: 7px; font-family: 'Courier New', ui-monospace, monospace; font-size: 12.5px; line-height: 1.45; padding: 12px 0; border-bottom: 1px solid color-mix(in oklab, currentColor 10%, transparent); }
-.hsp-full-scene:last-of-type { border-bottom: none; }
-.hsp-full-heading { display: flex; align-items: baseline; gap: 7px; font-weight: 700; font-size: 12.5px; opacity: 0.95; }
-.hsp-full-idx { opacity: 0.45; font-size: 11px; flex: none; }
-.hsp-full-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hsp-full-hint { padding: 10px 2px 4px; }
-.hsp-raw { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; margin: 0; opacity: 0.9; }
-.hsp-editor { display: flex; flex-direction: column; gap: 8px; }
-.hsp-textarea { width: 100%; box-sizing: border-box; min-height: 260px; resize: vertical; background: transparent; color: inherit; border: 1px solid color-mix(in oklab, currentColor 22%, transparent); border-radius: 8px; padding: 8px; font-family: 'Courier New', ui-monospace, monospace; font-size: 12.5px; line-height: 1.5; }
-.hsp-textarea-small { min-height: 72px; font-family: inherit; }
-.hsp-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.hsp-btn { appearance: none; border: 1px solid color-mix(in oklab, currentColor 25%, transparent); background: transparent; color: inherit; border-radius: 7px; padding: 5px 12px; font-size: 12.5px; cursor: pointer; text-decoration: none; display: inline-block; }
-.hsp-btn:hover { background: color-mix(in oklab, currentColor 8%, transparent); }
-.hsp-btn:disabled { opacity: 0.45; cursor: default; }
-.hsp-btn-primary { background: color-mix(in oklab, currentColor 14%, transparent); color: inherit; border-color: currentColor; font-weight: 600; }
-.hsp-btn-primary:hover { background: color-mix(in oklab, currentColor 20%, transparent); }
-.hsp-btn-danger { border-color: color-mix(in oklab, #ff7676 55%, transparent); color: #ff9c9c; }
-.hsp-btn-ghost { border-color: transparent; opacity: 0.7; }
-.hsp-btn-small { padding: 3px 9px; font-size: 11.5px; }
-.hsp-hint { opacity: 0.55; font-size: 11px; }
-.hsp-proposals { display: flex; flex-direction: column; gap: 8px; }
-.hsp-proposal-detail { border-top: 1px solid color-mix(in oklab, currentColor 15%, transparent); padding-top: 8px; display: flex; flex-direction: column; gap: 10px; }
-.hsp-proposal-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.hsp-changes { display: flex; flex-direction: column; gap: 10px; }
-.hsp-change { border: 1px solid color-mix(in oklab, currentColor 12%, transparent); border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
-.hsp-change-head { display: flex; align-items: center; gap: 8px; }
-.hsp-change-heading { font-weight: 650; font-size: 12.5px; }
-.hsp-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.hsp-diff-col { min-width: 0; }
-.hsp-diff-label { font-size: 10.5px; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 3px; }
-.hsp-pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-family: 'Courier New', ui-monospace, monospace; font-size: 11.5px; line-height: 1.5; background: color-mix(in oklab, currentColor 6%, transparent); border-radius: 7px; padding: 7px; max-height: 260px; overflow-y: auto; }
-.hsp-checks { display: flex; flex-direction: column; gap: 5px; }
-.hsp-check { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.hsp-check-name { font-size: 12px; font-weight: 550; }
-.hsp-rules { display: flex; flex-direction: column; gap: 10px; }
-.hsp-field { display: flex; flex-direction: column; gap: 4px; }
-.hsp-label { font-size: 11.5px; opacity: 0.75; }
-.hsp-input { background: transparent; color: inherit; border: 1px solid color-mix(in oklab, currentColor 22%, transparent); border-radius: 7px; padding: 5px 8px; font-size: 12.5px; }
-.hsp-input-num { width: 72px; flex: none; }
-.hsp-proto-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 6px; border-radius: 6px; background: color-mix(in oklab, currentColor 6%, transparent); }
-.hsp-proto-add { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
-.hsp-proto-add .hsp-select { flex: 1; min-width: 120px; }
-.hsp-history { display: flex; flex-direction: column; gap: 8px; }
-.hsp-hist-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; border: 1px solid color-mix(in oklab, currentColor 12%, transparent); border-radius: 8px; }
-.hsp-export { display: flex; flex-direction: column; gap: 10px; }
-.hsp-export-result { display: flex; flex-direction: column; gap: 8px; }
-.hsp-pdf-wrap { display: flex; flex-direction: column; gap: 8px; }
-.hsp-pdf { width: 100%; height: 460px; border: 1px solid color-mix(in oklab, currentColor 20%, transparent); border-radius: 8px; background: #fff; }
-.hsp-guard { position: fixed; inset: 0; background: color-mix(in oklab, #000 45%, transparent); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.hsp-guard-box { background: color-mix(in oklab, currentColor 8%, transparent); color: inherit; border: 1px solid color-mix(in oklab, currentColor 25%, transparent); border-radius: 12px; padding: 16px; width: min(420px, 80vw); display: flex; flex-direction: column; gap: 10px; }
-.hsp-guard-title { font-weight: 700; font-size: 14px; }
-.hsp-guard-text { font-size: 12.5px; opacity: 0.85; line-height: 1.45; }
-.hsp-guard-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.hsp-notice { animation: hsp-notice-in 0.35s ease backwards; }
-@keyframes hsp-notice-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
-.hsp-notice-leave { opacity: 0; transform: translateY(-4px); transition: opacity 0.35s ease, transform 0.35s ease; }
-.hsp-dd { position: relative; width: 100%; }
-.hsp-dd-toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-radius: 8px; border: 1px solid color-mix(in oklab, currentColor 25%, transparent); background: color-mix(in oklab, currentColor 6%, transparent); color: inherit; font-size: 13px; cursor: pointer; text-align: left; appearance: none; }
-.hsp-dd-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hsp-dd-caret { opacity: 0.55; font-size: 11px; flex: none; }
-.hsp-dd-list { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 50; max-height: 280px; overflow-y: auto; background: color-mix(in oklab, currentColor 14%, transparent); color: inherit; border: 1px solid color-mix(in oklab, currentColor 24%, transparent); border-radius: 10px; padding: 4px; display: flex; flex-direction: column; gap: 2px; box-shadow: 0 10px 28px rgba(0,0,0,0.30); }
-.hsp-dd-item { appearance: none; border: 1px solid transparent; background: transparent; color: inherit; text-align: left; padding: 6px 10px; border-radius: 7px; cursor: pointer; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hsp-dd-item:hover { background: color-mix(in oklab, currentColor 10%, transparent); }
-.hsp-dd-item-active { background: color-mix(in oklab, currentColor 18%, transparent); color: inherit; font-weight: 600; }
-/* ---- View settings: font + size + light "paper" theme ----
-   --gw-font / --gw-size are set inline on .hsp-pane (see the pane style).
-   The reading surface (paper) switches between the host's dark surface and a
-   warm-white light theme; the chrome (header, tabs, scene head) keeps the
-   host theme. All of this is plain CSS — no dependencies. */
-.hsp-full-scene { font-family: var(--gw-font, 'Courier New', ui-monospace, monospace); font-size: var(--gw-size, 13px); }
-.hsp-full-heading { font-size: var(--gw-size, 13px); }
-.hsp-viewbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.hsp-viewbar-label { opacity: 0.6; font-size: 11.5px; }
-.hsp-viewbar-sep { opacity: 0.3; font-size: 11px; }
-/* search / find & replace bar */
-.hsp-searchbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.hsp-searchbar-ico { opacity: 0.6; font-size: 13px; }
-.hsp-searchbar-input { flex: 1 1 120px; min-width: 96px; padding: 4px 8px; border-radius: 7px; border: 1px solid color-mix(in oklab, currentColor 30%, transparent); background: color-mix(in oklab, currentColor 6%, transparent); color: inherit; font-size: 12.5px; }
-.hsp-searchbar-input::placeholder { color: color-mix(in oklab, currentColor 45%, transparent); }
-.hsp-searchbar-count { opacity: 0.6; font-size: 11.5px; white-space: nowrap; }
-/* search highlights: yellow background, blue font; the current hit is stronger. */
-.hsp-mark { background: #ffe873; color: #1a3fbf; border-radius: 2px; padding: 0 1px; }
-.hsp-mark-current { background: #ffcf33; color: #102a9e; box-shadow: 0 0 0 1px #ffcf33; }
-.hsp-vbsel { width: auto; min-width: 74px; padding: 3px 7px; font-size: 11.5px; background: transparent; color: inherit; }
-.hsp-iconbtn { padding: 3px 9px; font-size: 14px; line-height: 1; }
-/* ---- side-by-side chat rail (feature #3) ----
-   The manuscript and the chat share the Script tab: a two-column grid where the
-   text stays on the left and a compact, plugin-owned chat docks on the right —
-   read and talk at once, no separate window. Colors follow the host theme via
-   currentColor/color-mix, so it works in both dark and light host themes. */
-.hsp-btn-on { border-color: currentColor; background: color-mix(in oklab, currentColor 16%, transparent); }
-.hsp-split { display: flex; flex-direction: row; align-items: stretch; flex: 1; min-height: 0; }
-.hsp-split-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.gw-resize-handle { flex: none; width: 12px; margin: 0 2px; cursor: col-resize; display: flex; align-items: center; justify-content: center; touch-action: none; }
-.gw-resize-handle::before { content: ''; width: 3px; height: 44px; border-radius: 3px; background: color-mix(in oklab, currentColor 16%, transparent); transition: background .15s ease, height .15s ease; }
-.gw-resize-handle:hover::before, .gw-resize-handle.gw-resize-active::before { background: color-mix(in oklab, currentColor 42%, transparent); height: 64px; }
-.gw-chat-col { flex: none; min-width: 260px; min-height: 0; display: flex; flex-direction: column; }
-.gw-rail { display: flex; flex-direction: column; flex: 1; min-height: 0; border: 1px solid color-mix(in oklab, currentColor 16%, transparent); border-radius: 12px; background: color-mix(in oklab, currentColor 4%, transparent); overflow: hidden; }
-.gw-rail-head { display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-bottom: 1px solid color-mix(in oklab, currentColor 14%, transparent); flex: none; }
-.gw-tabs { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; padding-right: 2px; }
-.gw-tab { display: flex; align-items: center; gap: 5px; max-width: 160px; padding: 4px 6px 4px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; border: 1px solid transparent; white-space: nowrap; transition: background .12s ease, border-color .12s ease; }
-.gw-tab:hover { background: color-mix(in oklab, currentColor 8%, transparent); }
-.gw-tab-active { border-color: color-mix(in oklab, currentColor 30%, transparent); background: color-mix(in oklab, currentColor 11%, transparent); font-weight: 600; }
-.gw-tab-title { overflow: hidden; text-overflow: ellipsis; }
-.gw-tab-x { border: none; background: transparent; color: inherit; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; opacity: 0.5; border-radius: 4px; flex: none; }
-.gw-tab-x:hover { opacity: 1; background: color-mix(in oklab, currentColor 18%, transparent); }
-.gw-add-wrap { position: relative; flex: none; }
-.gw-add-btn { border: 1px solid color-mix(in oklab, currentColor 22%, transparent); background: color-mix(in oklab, currentColor 6%, transparent); color: inherit; cursor: pointer; font-size: 13px; line-height: 1; padding: 3px 9px; border-radius: 8px; }
-.gw-add-btn:hover { background: color-mix(in oklab, currentColor 12%, transparent); }
-.gw-add-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; min-width: 200px; max-width: 280px; max-height: 300px; overflow-y: auto; padding: 5px; border-radius: 10px; border: 1px solid var(--border, color-mix(in oklab, currentColor 26%, transparent)); background: var(--card, #1c1c20); box-shadow: 0 12px 34px rgba(0,0,0,0.38); }
-.gw-add-item { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; border: none; background: transparent; color: var(--foreground, #e6e6e6); cursor: pointer; font-size: 12.5px; padding: 7px 9px; border-radius: 7px; }
-.gw-add-item:hover { background: color-mix(in oklab, currentColor 12%, transparent); }
-.gw-add-item-primary { font-weight: 600; }
-.gw-add-sep { height: 1px; margin: 5px 4px; background: color-mix(in oklab, currentColor 16%, transparent); }
-.gw-add-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; opacity: 0.8; }
-.gw-add-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gw-close-btn { border: none; background: transparent; color: inherit; cursor: pointer; font-size: 13px; line-height: 1; padding: 4px 7px; border-radius: 7px; flex: none; opacity: 0.7; }
-.gw-close-btn:hover { opacity: 1; background: color-mix(in oklab, currentColor 12%, transparent); }
-.gw-chat-list { flex: 1; min-height: 0; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
-.gw-chat-empty { opacity: 0.6; font-size: 12px; line-height: 1.5; }
-.gw-msg { display: flex; flex-direction: column; gap: 2px; max-width: 100%; }
-.gw-msg-user { align-items: flex-end; }
-.gw-msg-asst { align-items: flex-start; }
-.gw-msg-text { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; line-height: 1.5; padding: 6px 9px; border-radius: 8px; max-width: 100%; }
-.gw-msg-user .gw-msg-text { background: color-mix(in oklab, currentColor 12%, transparent); }
-.gw-msg-asst .gw-msg-text { background: transparent; opacity: 0.92; }
-.gw-chat-err { margin: 0 10px 8px; }
-.gw-chat-input { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid color-mix(in oklab, currentColor 14%, transparent); align-items: flex-end; }
-.gw-chat-field { flex: 1; resize: none; background: transparent; color: inherit; border: 1px solid color-mix(in oklab, currentColor 22%, transparent); border-radius: 8px; padding: 6px 8px; font-size: 12.5px; line-height: 1.4; font-family: inherit; }
-.gw-chat-field::placeholder { color: color-mix(in oklab, currentColor 45%, transparent); }
-.gw-chat-send { flex: none; padding: 6px 12px; }
+/* --- buttons --- */
+.gw-btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 32px; padding: 0 13px; border-radius: var(--gw-radius-sm); border: 1px solid var(--gw-line-strong); background: var(--gw-soft); cursor: pointer; font-weight: 550; font-size: 13px; white-space: nowrap; text-decoration: none; transition: background .15s, border-color .15s, transform .05s, box-shadow .15s; }
+.gw-btn:hover:not(:disabled) { background: var(--gw-soft-2); border-color: color-mix(in oklab, currentColor 28%, transparent); }
+.gw-btn:active:not(:disabled) { transform: translateY(1px); }
+.gw-btn:disabled { opacity: .45; cursor: default; }
+.gw-btn-small { height: 27px; padding: 0 10px; font-size: 12px; }
+.gw-btn-primary, .gw-btn-accent { background: var(--gw-accent); border-color: transparent; color: #fff !important; box-shadow: 0 1px 2px rgba(60,40,200,.25); }
+.gw-btn-primary:hover:not(:disabled), .gw-btn-accent:hover:not(:disabled) { background: var(--gw-accent-strong); border-color: transparent; }
+.gw-btn-accent.gw-on { background: var(--gw-accent-soft); color: inherit !important; box-shadow: inset 0 0 0 1px var(--gw-accent); }
+.gw-btn-danger { background: var(--gw-bad); border-color: transparent; color: #fff !important; }
+.gw-btn-danger:hover:not(:disabled) { background: color-mix(in oklab, var(--gw-bad) 85%, black); }
+.gw-btn-ghost { background: transparent; border-color: transparent; }
+.gw-btn kbd { font: 600 10.5px var(--gw-ui-font); opacity: .75; padding: 1px 5px; border-radius: 4px; background: rgba(255,255,255,.18); }
+.gw-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: var(--gw-radius-sm); border: 1px solid transparent; background: transparent; cursor: pointer; color: var(--gw-muted); transition: background .15s, color .15s; }
+.gw-icon-btn:hover:not(:disabled) { background: var(--gw-soft-2); color: inherit; }
+.gw-icon-btn:disabled { opacity: .35; cursor: default; }
+.gw-icon-btn.gw-on { background: var(--gw-accent-soft); color: var(--gw-accent); }
+.gw-icon-btn-small { width: 24px; height: 24px; }
 
-/* ================= UI Revamp — design system =================
-   Fonts: the manuscript is Courier Prime (self-hosted, the standard screenplay
-   face); the chrome (--gw-ui) is 'inherit', so it uses the host theme's default
-   font. The manuscript sits on a centred "paper" page whose tone is --gw-paper
-   (pale blue by default). The chrome follows the host theme via currentColor /
-   color-mix, so it stays correct in both light and dark hosts. */
+/* --- chips / badges --- */
+.gw-chip { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: .01em; white-space: nowrap; background: var(--gw-soft-2); color: var(--gw-muted); vertical-align: middle; }
+.gw-chip-pending { background: var(--gw-accent-soft); color: var(--gw-accent); }
+.gw-chip-good { background: color-mix(in oklab, var(--gw-good) 16%, transparent); color: var(--gw-good); }
+.gw-chip-warn { background: color-mix(in oklab, var(--gw-warn) 18%, transparent); color: var(--gw-warn); }
+.gw-chip-bad { background: color-mix(in oklab, var(--gw-bad) 16%, transparent); color: var(--gw-bad); }
+.gw-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--gw-accent); color: #fff; font-size: 10.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.gw-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gw-warn); }
+.gw-count { font-size: 11px; font-weight: 600; color: var(--gw-muted); background: var(--gw-soft-2); border-radius: 999px; padding: 1px 7px; }
 
-/* --- app shell --- */
-.hsp-pane { padding: 0; gap: 0; font-family: var(--gw-ui, ui-monospace, monospace); }
-.hsp-notice { margin: 8px 16px 0; }
-.hsp-import { margin: 12px 16px; }
-.hsp-error, .hsp-empty, .hsp-muted { padding: 16px; }
-.hsp-tabbody { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+/* --- topbar --- */
+.gw-topbar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; height: 52px; padding: 0 14px; border-bottom: 1px solid var(--gw-line); flex: none; }
+.gw-topbar-left, .gw-topbar-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.gw-topbar-right { justify-content: flex-end; }
+.gw-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; letter-spacing: -.01em; }
+.gw-brand-mark { width: 26px; height: 26px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: #fff; background: linear-gradient(135deg, #8b7bff, #5b45e0); box-shadow: 0 2px 6px rgba(91,69,224,.35); }
+.gw-nav { display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--gw-soft); border: 1px solid var(--gw-line); }
+.gw-nav-item { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border: none; border-radius: 7px; background: transparent; cursor: pointer; color: var(--gw-muted); font-weight: 550; transition: background .15s, color .15s; }
+.gw-nav-item:hover { color: inherit; }
+.gw-nav-active { background: color-mix(in oklab, currentColor 9%, transparent); color: inherit; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
 
-/* --- topbar (identity row) --- */
-.hsp-topbar { display: flex; align-items: center; gap: 12px; height: 52px; flex: none; padding: 0 16px; border-bottom: 1px solid color-mix(in oklab, currentColor 12%, transparent); }
-.hsp-topbar-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.hsp-brand { font-weight: 700; font-size: 12.5px; letter-spacing: 0.16em; text-transform: uppercase; opacity: 0.92; flex: none; }
-.hsp-topbar-sep { opacity: 0.28; font-size: 13px; flex: none; }
-.hsp-topbar-left .hsp-dd { width: auto; min-width: 140px; max-width: 300px; }
-.hsp-topbar-left .hsp-dd-toggle { padding: 5px 11px; font-size: 13px; border-radius: 8px; font-family: var(--gw-ui, ui-monospace, monospace); }
-.hsp-format-chip { font-size: 9.5px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; padding: 3px 9px; border-radius: 20px; background: color-mix(in oklab, currentColor 12%, transparent); opacity: 0.8; flex: none; }
-.hsp-viewtabs { display: flex; align-items: center; gap: 2px; margin-left: 6px; padding: 3px; border-radius: 10px; background: color-mix(in oklab, currentColor 6%, transparent); flex: none; }
-.hsp-vtab { appearance: none; border: none; background: transparent; color: inherit; opacity: 0.6; padding: 4px 12px; font-size: 12px; font-family: var(--gw-ui, ui-monospace, monospace); cursor: pointer; border-radius: 7px; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
-.hsp-vtab:hover { opacity: 0.9; }
-.hsp-vtab-active { opacity: 1; font-weight: 600; background: color-mix(in oklab, currentColor 15%, transparent); }
-.hsp-topbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
-.hsp-status { font-size: 10.5px; opacity: 0.45; white-space: nowrap; }
+/* --- project picker & menus --- */
+.gw-dd { position: relative; min-width: 0; }
+.gw-dd-toggle { display: inline-flex; align-items: center; gap: 8px; max-width: 280px; height: 32px; padding: 0 10px; border-radius: var(--gw-radius-sm); border: 1px solid var(--gw-line); background: transparent; cursor: pointer; font-weight: 600; }
+.gw-dd-toggle:hover, .gw-dd-open { background: var(--gw-soft-2); }
+.gw-dd-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gw-dd-caret { opacity: .6; }
+.gw-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; min-width: 270px; padding: 6px; border-radius: 12px; border: 1px solid var(--gw-line-strong); background: var(--gw-surface); color: var(--gw-surface-fg); box-shadow: var(--gw-shadow); animation: gw-pop .14s ease-out; }
+.gw-menu-right { left: auto; right: 0; }
+.gw-menu-scroll { max-height: 280px; overflow-y: auto; }
+.gw-menu-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--gw-muted); padding: 6px 8px 4px; }
+.gw-menu-item { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 9px; border: none; background: transparent; border-radius: 7px; cursor: pointer; text-align: left; }
+.gw-menu-item:hover { background: var(--gw-soft-2); }
+.gw-menu-active { background: var(--gw-accent-soft); }
+.gw-menu-danger { color: var(--gw-bad); }
+.gw-menu-sep { height: 1px; background: var(--gw-line); margin: 5px 2px; }
+.gw-menu-project-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.gw-menu-project-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gw-menu-project-meta { font-size: 11.5px; color: var(--gw-muted); }
 
-/* --- workspace (outline | stage) --- */
-.gw-workspace { display: flex; flex-direction: row; align-items: stretch; flex: 1; min-height: 0; }
-.gw-outline { flex: none; width: 244px; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid color-mix(in oklab, currentColor 10%, transparent); background: color-mix(in oklab, currentColor 3%, transparent); }
-.gw-outline-hidden .gw-outline { display: none; }
-.gw-outline-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px 8px; flex: none; }
-.gw-outline-title { font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.55; }
-.gw-outline-count { font-size: 10.5px; opacity: 0.5; background: color-mix(in oklab, currentColor 10%, transparent); border-radius: 10px; padding: 0 7px; }
-.gw-outline-head .gw-iconbtn { margin-left: auto; }
-.gw-outline-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 12px; display: flex; flex-direction: column; gap: 2px; }
-.gw-outline-row { appearance: none; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 6px 9px; color: inherit; cursor: pointer; font-size: 12px; font-family: var(--gw-ui, ui-monospace, monospace); display: flex; gap: 8px; align-items: baseline; min-width: 0; }
-.gw-outline-row:hover { background: color-mix(in oklab, currentColor 7%, transparent); }
-.gw-outline-active { border-color: color-mix(in oklab, currentColor 28%, transparent); background: color-mix(in oklab, currentColor 9%, transparent); }
-.gw-outline-text { display: flex; gap: 8px; align-items: baseline; min-width: 0; overflow: hidden; }
-.gw-outline-text span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hsp-nav-idx { opacity: 0.5; font-size: 10.5px; flex: none; }
+/* --- layout --- */
+.gw-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.gw-tab { flex: 1; min-height: 0; display: flex; flex-direction: column; animation: gw-fade .18s ease-out; }
+.gw-scroll { overflow-y: auto; }
+.gw-workspace { flex: 1; min-height: 0; display: flex; }
+.gw-split { flex: 1; min-height: 0; display: flex; }
+.gw-split-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.gw-resize { width: 5px; flex: none; cursor: col-resize; position: relative; }
+.gw-resize::after { content: ''; position: absolute; inset: 0 2px; background: var(--gw-line); transition: background .15s; }
+.gw-resize:hover::after, .gw-resize-active::after { background: var(--gw-accent); }
+.gw-chat-col { flex: none; min-width: 300px; display: flex; flex-direction: column; border-left: 1px solid var(--gw-line); }
 
-/* --- stage (manuscript column) --- */
-.gw-stage { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px 20px; position: relative; }
-.gw-slate, .hsp-viewbar, .hsp-searchbar, .hsp-editor { width: 100%; max-width: 610px; }
-.gw-slate { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: none; }
-.gw-slate-title { font-weight: 650; font-size: 13px; font-family: var(--gw-ui, ui-monospace, monospace); }
-.gw-outline-show { position: absolute; top: 18px; left: 6px; z-index: 5; }
+/* --- outline --- */
+.gw-outline { width: 250px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--gw-line); background: var(--gw-soft); }
+.gw-outline-head { display: flex; align-items: center; gap: 8px; padding: 12px 10px 8px 14px; }
+.gw-outline-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--gw-muted); }
+.gw-outline-list { flex: 1; overflow-y: auto; padding: 2px 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+.gw-outline-empty { padding: 10px 8px; color: var(--gw-muted); font-size: 12.5px; }
+.gw-scene-row { display: flex; align-items: flex-start; gap: 9px; width: 100%; padding: 8px 8px; border: none; border-radius: 8px; background: transparent; cursor: pointer; text-align: left; position: relative; transition: background .12s; }
+.gw-scene-row:hover { background: var(--gw-soft-2); }
+.gw-scene-row-active { background: var(--gw-accent-soft); }
+.gw-scene-row-active::before { content: ''; position: absolute; left: -8px; top: 8px; bottom: 8px; width: 3px; border-radius: 3px; background: var(--gw-accent); }
+.gw-scene-idx { flex: none; min-width: 22px; height: 22px; padding: 0 4px; border-radius: 6px; background: var(--gw-soft-2); color: var(--gw-muted); font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.gw-scene-row-active .gw-scene-idx { background: var(--gw-accent); color: #fff; }
+.gw-scene-text { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 1px; }
+.gw-scene-place { font-weight: 600; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: uppercase; letter-spacing: .01em; }
+.gw-setting { font-size: 9.5px; font-weight: 700; letter-spacing: .05em; padding: 1px 4px; margin-right: 5px; border-radius: 4px; border: 1px solid var(--gw-line-strong); color: var(--gw-muted); vertical-align: 1px; }
+.gw-scene-meta { font-size: 11.5px; color: var(--gw-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gw-warn-icon { color: var(--gw-warn); margin-top: 3px; }
+.gw-outline-add { display: flex; align-items: center; gap: 7px; margin: 8px; padding: 9px 10px; border-radius: 8px; border: 1px dashed var(--gw-line-strong); background: transparent; color: var(--gw-muted); cursor: pointer; font-weight: 550; font-size: 12.5px; }
+.gw-outline-add:hover { color: var(--gw-accent); border-color: var(--gw-accent); background: var(--gw-accent-soft); }
 
-/* --- the paper (centred manuscript page) --- */
-.hsp-full { flex: 1; min-height: 0; width: 100%; max-width: 720px; overflow-y: auto; background: var(--gw-paper, #dbe3f4); color: #1b1e28; border-radius: 3px; box-shadow: 0 2px 16px rgba(0,0,0,0.22); padding: 30px 54px; box-sizing: border-box; border: none; }
-.hsp-full-scene { font-family: var(--gw-font, 'Courier Prime', monospace); font-size: var(--gw-size, 13px); line-height: 1.55; padding: 12px 0; border-bottom: 1px solid color-mix(in oklab, #1b1e28 9%, transparent); }
-.hsp-full-scene:last-of-type { border-bottom: none; }
-.hsp-full-heading { display: flex; align-items: baseline; gap: 8px; font-family: var(--gw-font, 'Courier Prime', monospace); font-weight: 700; font-size: calc(var(--gw-size, 13px) + 0.5px); margin-bottom: 6px; color: #14171f; text-transform: uppercase; letter-spacing: 0.01em; }
-.hsp-full-idx { opacity: 0.45; font-size: 0.85em; flex: none; }
-.hsp-full-hint { font-family: var(--gw-ui, ui-monospace, monospace); font-size: 11px; opacity: 0.55; text-align: center; padding: 18px 0 6px; }
+/* --- stage --- */
+.gw-stage { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px 22px 8px; position: relative; }
+.gw-toolbar { width: 100%; max-width: var(--gw-page-w, 720px); display: flex; align-items: center; justify-content: space-between; gap: 10px; flex: none; }
+.gw-toolbar-left, .gw-toolbar-right { display: flex; align-items: center; gap: 6px; }
+.gw-toolbar-sep { width: 1px; height: 18px; background: var(--gw-line-strong); margin: 0 2px; }
+.gw-segmented { display: inline-flex; padding: 3px; border-radius: 9px; background: var(--gw-soft); border: 1px solid var(--gw-line); gap: 2px; }
+.gw-seg { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px; border: none; border-radius: 6px; background: transparent; cursor: pointer; color: var(--gw-muted); font-weight: 550; font-size: 12.5px; }
+.gw-seg:hover { color: inherit; }
+.gw-seg-active { background: color-mix(in oklab, currentColor 10%, transparent); color: inherit; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.gw-zoom { display: inline-flex; align-items: center; gap: 0; }
+.gw-zoom-val { min-width: 40px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--gw-muted); }
+.gw-swatches { display: inline-flex; gap: 6px; padding: 0 4px; }
+.gw-swatch { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(0,0,0,.18); cursor: pointer; padding: 0; transition: transform .12s, box-shadow .12s; }
+.gw-swatch:hover { transform: scale(1.15); }
+.gw-swatch-active { box-shadow: 0 0 0 2px var(--gw-surface), 0 0 0 4px var(--gw-accent); }
+.gw-findbar { width: 100%; max-width: var(--gw-page-w, 720px); display: flex; align-items: center; gap: 8px; flex: none; padding: 7px 8px; border-radius: var(--gw-radius); border: 1px solid var(--gw-line-strong); background: var(--gw-soft); animation: gw-pop .14s ease-out; flex-wrap: wrap; }
+.gw-find-field { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 160px; height: 30px; padding: 0 4px 0 9px; border-radius: 7px; border: 1px solid var(--gw-line); background: var(--gw-field); color: var(--gw-muted); }
+.gw-find-field:focus-within { border-color: var(--gw-accent); }
+.gw-find-field input { flex: 1; min-width: 0; border: none; background: transparent; outline: none; color: inherit; }
+.gw-find-count { font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.gw-banner { width: 100%; max-width: var(--gw-page-w, 720px); display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; border-radius: var(--gw-radius); background: var(--gw-accent-soft); border: 1px solid color-mix(in oklab, var(--gw-accent) 35%, transparent); color: inherit; flex: none; animation: gw-pop .2s ease-out; }
+.gw-banner > span { flex: 1; font-size: 13px; }
+.gw-banner > .gw-icon { color: var(--gw-accent); }
+.gw-statusbar { display: flex; align-items: center; gap: 7px; width: 100%; max-width: var(--gw-page-w, 720px); font-size: 11.5px; color: var(--gw-muted); flex: none; padding: 2px 4px; font-variant-numeric: tabular-nums; }
+.gw-statusbar-right { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
 
-/* --- Fountain (screenplay) typography on the paper --- */
-.hsp-raw { font-family: var(--gw-font, 'Courier Prime', monospace); color: #1b1e28; }
-
-/* --- editor (write on the page) --- */
-.hsp-editor { display: flex; flex-direction: column; gap: 8px; }
-.hsp-textarea { width: 100%; box-sizing: border-box; min-height: 320px; resize: vertical; background: var(--gw-paper, #dbe3f4); color: #1b1e28; border: 1px solid color-mix(in oklab, #1b1e28 16%, transparent); border-radius: 3px; padding: 28px 52px; font-family: var(--gw-font, 'Courier Prime', monospace); font-size: var(--gw-size, 13px); line-height: 1.55; }
-
-/* --- viewbar + searchbar (chrome above the paper) --- */
-.hsp-viewbar { justify-content: center; }
-.hsp-searchbar { justify-content: center; }
-
-/* --- focus mode: hide chrome, let the page breathe --- */
-.hsp-pane-focus .hsp-topbar { opacity: 0; transition: opacity .18s ease; }
-.hsp-pane-focus .hsp-topbar:hover { opacity: 1; }
-.hsp-pane-focus .gw-outline { display: none; }
-.hsp-pane-focus .hsp-viewbar, .hsp-pane-focus .hsp-searchbar, .hsp-pane-focus .gw-slate, .hsp-pane-focus .gw-outline-show { display: none; }
-.hsp-pane-focus .gw-stage { padding: 32px 0 40px; }
-/* Companion pages: side margins + a readable max-width so they don't hug the sidebars. */
-.hsp-proposals, .hsp-rules, .hsp-history, .hsp-export { width: 100%; max-width: 880px; margin: 0 auto; box-sizing: border-box; padding: 18px 32px 28px; }
-/* Paper tone: a single round swatch filled with the current paper color; click to cycle. */
-.gw-tone { appearance: none; width: 26px; height: 26px; border-radius: 50%; padding: 3px; border: 1px solid color-mix(in oklab, currentColor 30%, transparent); background: transparent; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
-.gw-tone:hover { border-color: color-mix(in oklab, currentColor 50%, transparent); }
-.gw-tone-dot { width: 100%; height: 100%; border-radius: 50%; box-shadow: inset 0 0 0 1px color-mix(in oklab, currentColor 22%, transparent); }
-/* Font-size slider (replaces the S/M/L/XL dropdown). */
-.hsp-size-range { appearance: none; width: 92px; height: 4px; border-radius: 2px; background: color-mix(in oklab, currentColor 25%, transparent); cursor: pointer; }
-.hsp-size-range::-webkit-slider-thumb { appearance: none; width: 13px; height: 13px; border-radius: 50%; background: currentColor; border: none; }
-.hsp-size-range::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; background: currentColor; border: none; }
-.hsp-size-val { min-width: 34px; text-align: right; }
-/* Word + scene counter at the bottom of the paper stage. */
-.gw-statusbar { display: flex; align-items: center; gap: 8px; flex: none; font-size: 11px; opacity: 0.6; padding-top: 2px; }
-.gw-statusbar-sep { opacity: 0.5; }
-/* Whole-document editor: the textarea fills the stage like the paper does. */
-.hsp-editor-doc { flex: 1; min-height: 0; width: 100%; max-width: 720px; }
-.hsp-textarea-doc { flex: 1; min-height: 0; }
-.hsp-pane-focus .hsp-full { max-width: 960px; box-shadow: none; }
-
-/* ================= Theme-aware chrome + manuscript palette ================
-   The chrome inherits the host theme: the pane sits on the app's editor
-   background (no forced background) and every element is driven by
-   currentColor / color-mix, so the whole UI reskins with whatever theme the
-   host is running (light or dark) - nothing is forced to a fixed brand colour.
-   Only the manuscript keeps its own palette: --gw-ink (the ink) on --gw-paper
-   (the toned page, set inline by the tone switcher). */
-.hsp-pane { --gw-ink: #13243B; }
-button:focus-visible, .hsp-input:focus, .hsp-select:focus, .hsp-textarea:focus, .hsp-searchbar-input:focus, .hsp-vbsel:focus { outline: 2px solid color-mix(in oklab, currentColor 50%, transparent); outline-offset: 1px; }
-/* manuscript ink on the toned paper */
-.hsp-full { color: var(--gw-ink); }
-.hsp-full-scene { border-bottom-color: color-mix(in oklab, var(--gw-ink) 10%, transparent); }
-.hsp-full-heading { color: var(--gw-ink); }
-.hsp-raw { color: var(--gw-ink); }
-.hsp-textarea { background: var(--gw-paper, #DCEBF0); color: var(--gw-ink); border-color: color-mix(in oklab, var(--gw-ink) 18%, transparent); }
-/* Standard title page: its own FIRST page (full page tall) - title in the upper
-   third, credit/author in the middle, contact bottom-left, with a page-edge at
-   the bottom so the body clearly starts on the next page. */
-.hsp-titlepage { text-align: center; }
-.hsp-full .hsp-titlepage { display: flex; flex-direction: column; min-height: 100%; border-bottom: 1px solid color-mix(in oklab, var(--gw-ink) 16%, transparent); box-shadow: 0 8px 22px -10px rgba(0,0,0,0.42); margin-bottom: 12px; }
-.hsp-titlepage-spacer { flex: 3 1 0; min-height: 16px; }
-.hsp-titlepage-grow { flex: 5 1 0; min-height: 16px; }
-.hsp-titlepage-title { font-family: var(--gw-font, 'Courier Prime', monospace); font-size: 1.9em; line-height: 1.2; letter-spacing: 0.06em; font-weight: 700; color: var(--gw-ink); }
-.hsp-titlepage-credit { margin-top: 18px; display: flex; flex-direction: column; gap: 6px; align-items: center; }
-.hsp-titlepage-line { font-family: var(--gw-font, 'Courier Prime', monospace); font-size: 1.1em; color: var(--gw-ink); }
-.hsp-titlepage-contact { align-self: flex-start; text-align: left; padding-bottom: 8px; }
-.hsp-titlepage-contact-line { font-family: var(--gw-font, 'Courier Prime', monospace); font-size: 1em; line-height: 1.5; color: var(--gw-ink); }
-/* Formatted editor: per-element fields that reuse the read-view .f-* classes so
-   the standard screenplay format stays visible while editing. */
-.hsp-editor-doc .hsp-editor-scroll { flex: 1; min-height: 0; overflow-y: auto; }
-.hsp-edit-scene { font-family: var(--gw-font, 'Courier Prime', monospace); font-size: var(--gw-size, 13px); line-height: 1.55; color: var(--gw-ink); margin-bottom: 6px; }
-.hsp-edit-el { display: block; width: 100%; box-sizing: border-box; background: transparent; border: none; border-radius: 3px; padding: 1px 4px; margin: 0; color: var(--gw-ink); font-family: inherit; font-size: inherit; line-height: inherit; resize: none; overflow: hidden; white-space: pre-wrap; }
-.hsp-edit-el:focus { outline: 2px solid color-mix(in oklab, currentColor 45%, transparent); outline-offset: 1px; background: color-mix(in oklab, currentColor 6%, transparent); }
-/* Editable title-page fields (in the formatted editor). */
-.hsp-titlepage-edit { padding: 22px 8px; }
-.hsp-titlepage-contact-edit { max-width: 440px; margin: 16px auto 4px; display: flex; flex-direction: column; gap: 9px; }
-.hsp-titlepage-contact-edit .hsp-titlepage-input { text-align: left; }
-.hsp-titlepage-contact-label { font-family: 'Courier New', ui-monospace, monospace; font-size: 0.82em; color: color-mix(in oklab, var(--gw-ink) 55%, transparent); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
-.hsp-titlepage-input { display: block; width: 100%; max-width: 440px; margin: 0 auto 9px; background: transparent; border: 1px dashed color-mix(in oklab, var(--gw-ink) 30%, transparent); border-radius: 4px; padding: 4px 8px; color: var(--gw-ink); font-family: 'Courier New', ui-monospace, monospace; font-size: 1em; text-align: center; }
-.hsp-titlepage-input-title { font-size: 1.6em; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; margin-bottom: 16px; }
-.hsp-titlepage-input::placeholder { color: color-mix(in oklab, var(--gw-ink) 45%, transparent); }
-.hsp-titlepage-input:focus { outline: 2px solid color-mix(in oklab, currentColor 45%, transparent); outline-offset: 1px; border-color: transparent; }
-.hsp-titlepage-extra { display: flex; align-items: center; justify-content: center; gap: 8px; max-width: 440px; margin: 0 auto 9px; }
-.hsp-titlepage-extra-key { font-family: 'Courier New', ui-monospace, monospace; font-size: 1em; color: color-mix(in oklab, var(--gw-ink) 70%, transparent); white-space: nowrap; }
-.hsp-titlepage-extra .hsp-titlepage-input { margin: 0; width: 100%; max-width: none; text-align: left; }
-/* ================= Screenplay page geometry =================
-   Columns follow the printed page (Courier, 10 characters per inch): the text
-   column is 60ch wide (1.5" left / 1" right margin on an 85ch page); dialogue
-   sits 10ch in and is 35ch wide, parentheticals 16ch in, cues 22ch in, and
-   transitions are flush right. Percentages keep the proportions on a narrow pane. */
-.hsp-page { font-family: var(--gw-font, 'Courier Prime', monospace); font-size: var(--gw-size, 13px); line-height: 1.25; color: var(--gw-ink, #1b1e28); }
-.hsp-full { max-width: calc(85ch + 2px); font-family: var(--gw-font, 'Courier Prime', monospace); font-size: var(--gw-size, 13px); padding: 2.5em 0; }
-.hsp-page { padding: 0 11.8% 0 17.6%; box-sizing: border-box; }
-.hsp-full-scene, .hsp-edit-scene { position: relative; display: block; padding: 0; border: none; gap: 0; font-family: inherit; font-size: inherit; line-height: inherit; }
+/* --- the paper --- */
+.hsp-full { flex: 1; min-height: 0; width: 100%; max-width: var(--gw-page-w, 720px); overflow-y: auto; background: var(--gw-paper, #dcebf0); color: var(--gw-ink); border-radius: 4px; box-shadow: 0 1px 1px rgba(0,0,0,.1), 0 10px 30px rgba(0,0,0,.22); padding: 3em 0 4em; font-family: var(--gw-font, 'Courier Prime', monospace); font-size: var(--gw-size, 13px); scroll-behavior: smooth; }
+.hsp-page { padding: 0 11.8% 0 17.6%; font-family: var(--gw-font, 'Courier Prime', monospace); font-size: var(--gw-size, 13px); line-height: 1.25; color: var(--gw-ink); }
+.hsp-full-scene, .hsp-edit-scene { position: relative; display: block; }
 .hsp-full-scene + .hsp-full-scene, .hsp-edit-scene + .hsp-edit-scene { margin-top: 2.5em; }
 .hsp-preamble { margin-bottom: 2.5em; }
-.hsp-scene-num { position: absolute; left: -5ch; top: 0; opacity: 0.45; font-size: 0.9em; }
+.hsp-scene-num { position: absolute; left: -5ch; top: 0; opacity: .4; font-size: .9em; }
+.gw-scene-ask { position: absolute; right: -9.5ch; top: -2px; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px; border: 1px solid color-mix(in oklab, var(--gw-accent) 40%, transparent); background: color-mix(in oklab, var(--gw-paper, #fff) 70%, white); color: var(--gw-accent-strong); font: 600 11px var(--gw-ui-font); cursor: pointer; opacity: 0; transform: translateX(-4px); transition: opacity .15s, transform .15s; }
+.hsp-full-scene:hover .gw-scene-ask, .gw-scene-ask:focus-visible { opacity: 1; transform: none; }
+.gw-scene-ask:hover { background: var(--gw-accent); color: #fff; }
+.gw-inline-warn { display: flex; align-items: center; gap: 6px; font: 12px var(--gw-ui-font); color: #9a6200; margin-bottom: .6em; }
 .f-scene, .f-action, .f-char, .f-trans, .f-centered, .f-lyric, .f-section, .f-synopsis, .f-note, .f-boneyard { margin-top: 1.25em; white-space: pre-wrap; }
 .f-paren, .f-dialogue { margin-top: 0; white-space: pre-wrap; }
 .hsp-full-scene > .f-scene, .hsp-preamble > :first-child, .hsp-edit-scene > :first-child { margin-top: 0; }
 .f-scene { font-weight: 700; }
-.f-char { margin-left: 36.67%; text-align: left; }
-.f-paren { margin-left: 26.67%; width: 41.67%; text-align: left; }
-.f-dialogue { margin-left: 16.67%; width: 58.33%; text-align: left; }
+.f-char { margin-left: 36.67%; }
+.f-paren { margin-left: 26.67%; width: 41.67%; }
+.f-dialogue { margin-left: 16.67%; width: 58.33%; }
 .f-trans { text-align: right; }
+.f-trans-left { text-align: left; }
 .f-centered { text-align: center; }
 .f-lyric { font-style: italic; }
-.f-section, .f-synopsis, .f-note, .f-boneyard { font-family: var(--gw-ui, inherit); font-size: 0.85em; opacity: 0.55; }
-.f-section { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.f-section, .f-synopsis, .f-note, .f-boneyard { font-family: var(--gw-ui-font); font-size: .82em; color: color-mix(in oklab, var(--gw-ink) 50%, transparent); }
+.f-section { font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
 .f-synopsis, .f-note { font-style: italic; }
+.f-note { border-left: 2px solid #e2b93b; padding-left: 8px; }
 .f-boneyard { text-decoration: line-through; }
-.f-pagebreak { margin: 1.25em 0 0; border-top: 1px dashed color-mix(in oklab, var(--gw-ink, #1b1e28) 35%, transparent); }
-textarea.hsp-edit-el { width: 100%; }
+.f-pagebreak { margin: 1.25em 0 0; border-top: 1px dashed color-mix(in oklab, var(--gw-ink) 30%, transparent); }
+.hsp-raw { white-space: pre-wrap; font: inherit; margin: 0; }
+.hsp-mark { background: #ffe58a; color: #1d2030; border-radius: 2px; padding: 0 1px; }
+.hsp-mark-current { background: #ffb020; box-shadow: 0 0 0 2px #ffb020; }
+.gw-page-empty { margin-top: 3em; display: flex; flex-direction: column; align-items: flex-start; gap: 1em; font-family: var(--gw-ui-font); font-size: 13.5px; color: color-mix(in oklab, var(--gw-ink) 75%, transparent); }
+.gw-page-empty-title { font-family: var(--gw-font, 'Courier Prime', monospace); font-size: var(--gw-size, 13px); color: var(--gw-ink); }
+.gw-page-empty .gw-btn { color: var(--gw-ink); }
+.gw-page-empty .gw-btn-accent { color: #fff; }
+.gw-page-hint { margin-top: 3em; font: 12px var(--gw-ui-font); color: color-mix(in oklab, var(--gw-ink) 50%, transparent); text-align: center; }
+
+/* title page */
+.hsp-titlepage { display: flex; flex-direction: column; text-align: center; }
+.hsp-full .hsp-titlepage { min-height: 52em; margin-bottom: 3.75em; padding-bottom: 1.25em; border-bottom: 1px dashed color-mix(in oklab, var(--gw-ink) 25%, transparent); }
+.hsp-titlepage-spacer { flex: 3 1 0; min-height: 2em; }
+.hsp-titlepage-grow { flex: 5 1 0; min-height: 2em; }
+.hsp-titlepage-title { font-weight: 700; }
+.hsp-titlepage-line { margin-top: 1.25em; }
+.hsp-titlepage-credit { margin-top: 3.75em; }
+.hsp-titlepage-corners { display: flex; justify-content: space-between; align-items: flex-end; gap: 2ch; text-align: left; }
+.hsp-titlepage-right { text-align: right; }
+
+/* --- editor --- */
+.gw-editor { flex: 1; min-height: 0; width: 100%; max-width: var(--gw-page-w, 720px); display: flex; flex-direction: column; gap: 10px; }
+.hsp-editor-paper { flex: 1; min-height: 0; overflow-y: auto; background: var(--gw-paper, #dcebf0); color: var(--gw-ink); border-radius: 4px; padding: 3em 0 3em; box-shadow: 0 0 0 2px var(--gw-accent-soft), 0 10px 30px rgba(0,0,0,.22); }
+.hsp-edit-el { display: block; width: 100%; background: transparent; border: none; border-radius: 3px; padding: 0; margin-bottom: 0; color: var(--gw-ink); font: inherit; resize: none; overflow: hidden; white-space: pre-wrap; transition: background .12s; }
+.hsp-edit-el:hover { background: color-mix(in oklab, var(--gw-ink) 4%, transparent); }
+.hsp-edit-el:focus { outline: none; background: color-mix(in oklab, white 55%, transparent); box-shadow: 0 0 0 2px color-mix(in oklab, var(--gw-accent) 55%, transparent); }
 textarea.hsp-edit-el.f-char { width: 63.33%; }
 textarea.hsp-edit-el.f-dialogue { width: 58.33%; }
 textarea.hsp-edit-el.f-paren { width: 41.67%; }
-.f-trans-left { text-align: left; }
-.hsp-source { flex: 1; min-height: 360px; width: 100%; max-width: calc(85ch + 2px); align-self: center; font-family: var(--gw-font, 'Courier Prime', monospace); font-size: var(--gw-size, 13px); line-height: 1.4; padding: 1.25em 2em; white-space: pre-wrap; }
-.hsp-editor-paper { flex: 1; min-height: 0; overflow-y: auto; width: 100%; max-width: calc(85ch + 2px); align-self: center; background: var(--gw-paper, #dbe3f4); border-radius: 3px; padding: 2.5em 0; box-sizing: border-box; box-shadow: 0 2px 16px rgba(0,0,0,0.22); }
-.hsp-titlepage-title { font-size: 1em; font-weight: 700; letter-spacing: 0; text-transform: none; }
-.hsp-titlepage-line { font-size: 1em; margin-top: 1.25em; }
-.hsp-titlepage-credit { margin-top: 3.75em; }
-.hsp-titlepage-corners { display: flex; justify-content: space-between; align-items: flex-end; gap: 2ch; text-align: left; padding-bottom: 1em; }
-.hsp-titlepage-right { text-align: right; }
-.hsp-full .hsp-titlepage { min-height: 52em; margin-bottom: 3.75em; box-shadow: none; border-bottom: 1px dashed color-mix(in oklab, var(--gw-ink, #1b1e28) 30%, transparent); padding-bottom: 1.25em; }
-.hsp-dd-item-danger { color: #e5534b; }
+.hsp-titlepage-edit { gap: 8px; padding-bottom: 2.5em; margin-bottom: 2.5em; border-bottom: 1px dashed color-mix(in oklab, var(--gw-ink) 25%, transparent); }
+.hsp-titlepage-input { display: block; width: 100%; max-width: 46ch; margin: 0 auto; background: color-mix(in oklab, white 35%, transparent); border: 1px solid color-mix(in oklab, var(--gw-ink) 16%, transparent); border-radius: 6px; padding: 6px 10px; color: var(--gw-ink); font: inherit; text-align: center; resize: vertical; }
+.hsp-titlepage-input::placeholder { color: color-mix(in oklab, var(--gw-ink) 40%, transparent); }
+.hsp-titlepage-input:focus { outline: none; border-color: var(--gw-accent); box-shadow: 0 0 0 3px var(--gw-accent-soft); }
+.hsp-titlepage-input-title { font-weight: 700; font-size: 1.15em; margin-bottom: 6px; }
+.hsp-titlepage-contact-edit { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.hsp-titlepage-contact-edit .hsp-titlepage-input { text-align: left; }
+.hsp-titlepage-contact-label { font: 600 10.5px var(--gw-ui-font); letter-spacing: .07em; text-transform: uppercase; color: color-mix(in oklab, var(--gw-ink) 50%, transparent); }
+.hsp-titlepage-extra { display: flex; align-items: center; gap: 8px; max-width: 46ch; margin: 0 auto; width: 100%; }
+.hsp-titlepage-extra-key { white-space: nowrap; color: color-mix(in oklab, var(--gw-ink) 60%, transparent); }
+.gw-source { flex: 1; min-height: 300px; width: 100%; resize: none; border-radius: 4px; border: none; padding: 2.5em 3em; background: var(--gw-paper, #dcebf0); color: var(--gw-ink) !important; font-family: var(--gw-font, 'Courier Prime', monospace) !important; font-size: var(--gw-size, 13px) !important; line-height: 1.45; box-shadow: 0 0 0 2px var(--gw-accent-soft), 0 10px 30px rgba(0,0,0,.22); }
+.gw-source:focus { outline: none; box-shadow: 0 0 0 2px var(--gw-accent), 0 10px 30px rgba(0,0,0,.22); }
+.gw-savebar { display: flex; align-items: center; gap: 8px; flex: none; padding: 8px 8px 8px 14px; border-radius: var(--gw-radius); border: 1px solid var(--gw-line); background: var(--gw-soft); transition: border-color .2s, background .2s; }
+.gw-savebar-dirty { border-color: color-mix(in oklab, var(--gw-warn) 45%, transparent); background: color-mix(in oklab, var(--gw-warn) 8%, transparent); }
+.gw-savebar-text { flex: 1; font-weight: 550; color: var(--gw-muted); }
+.gw-savebar-dirty .gw-savebar-text { color: inherit; }
+
+/* --- generic pages (Rules, History, Export) --- */
+.gw-page-narrow, .gw-page-wide { width: 100%; max-width: 760px; margin: 0 auto; padding: 28px 24px 48px; display: flex; flex-direction: column; gap: 14px; }
+.gw-page-wide { max-width: 980px; }
+.gw-h2 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+.gw-lead { margin: -6px 0 6px; color: var(--gw-muted); font-size: 13.5px; }
+.gw-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.gw-heading-row .gw-lead { margin-top: 4px; }
+.gw-card { border: 1px solid var(--gw-line); border-radius: 12px; background: var(--gw-soft); padding: 16px; text-align: left; }
+.gw-section-label { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--gw-muted); padding: 2px 2px 6px; }
+.gw-form { display: flex; flex-direction: column; gap: 12px; }
+.gw-form-title { font-weight: 650; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.gw-details > summary { cursor: pointer; list-style: none; }
+.gw-details > summary::-webkit-details-marker { display: none; }
+.gw-details > summary::after { content: '›'; margin-left: auto; transform: rotate(90deg); color: var(--gw-muted); transition: transform .15s; }
+.gw-details[open] > summary::after { transform: rotate(-90deg); }
+.gw-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.gw-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.gw-label { font-weight: 600; font-size: 12.5px; }
+.gw-help { font-size: 12px; color: var(--gw-muted); }
+.gw-input { width: 100%; height: 34px; padding: 0 10px; border-radius: var(--gw-radius-sm); border: 1px solid var(--gw-line-strong); background: var(--gw-field); transition: border-color .15s, box-shadow .15s; }
+.gw-input:focus { outline: none; border-color: var(--gw-accent); box-shadow: 0 0 0 3px var(--gw-accent-soft); }
+.gw-textarea { height: auto; padding: 9px 10px; resize: vertical; line-height: 1.5; }
+.gw-input-num { width: 86px; flex: none; }
+.gw-proto-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--gw-line); }
+.gw-proto-row .gw-small { flex: 1; }
+.gw-proto-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.gw-proto-add select { width: auto; flex: 1; min-width: 160px; }
+
+/* history timeline */
+.gw-timeline { list-style: none; margin: 6px 0 0; padding: 0; position: relative; }
+.gw-timeline::before { content: ''; position: absolute; left: 15px; top: 12px; bottom: 12px; width: 2px; background: var(--gw-line); }
+.gw-tl-item { display: flex; align-items: center; gap: 14px; padding: 10px 10px 10px 0; position: relative; border-radius: 10px; }
+.gw-tl-item:hover { background: var(--gw-soft); }
+.gw-tl-dot { width: 32px; height: 32px; flex: none; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--gw-surface); border: 2px solid var(--gw-line-strong); color: var(--gw-muted); z-index: 1; }
+.gw-tl-active .gw-tl-dot { border-color: var(--gw-accent); color: var(--gw-accent); background: color-mix(in oklab, var(--gw-surface) 85%, var(--gw-accent)); }
+.gw-tl-body { flex: 1; min-width: 0; }
+.gw-tl-title { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+
+/* export */
+.gw-export-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.gw-export-card { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; transition: border-color .15s, transform .15s; }
+.gw-export-card:hover { border-color: var(--gw-line-strong); }
+.gw-export-card .gw-btn { align-self: stretch; margin-top: 6px; }
+.gw-export-icon { width: 38px; height: 38px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; background: var(--gw-accent-soft); color: var(--gw-accent); }
+.gw-export-title { font-weight: 650; font-size: 14.5px; }
+.gw-pdf-card { display: flex; flex-direction: column; gap: 12px; animation: gw-pop .2s ease-out; }
+.gw-pdf { width: 100%; height: 640px; border: 1px solid var(--gw-line); border-radius: 8px; background: white; }
+
+/* review */
+.gw-review { flex: 1; min-height: 0; display: flex; }
+.gw-review-list { width: 300px; flex: none; overflow-y: auto; padding: 14px 12px; border-right: 1px solid var(--gw-line); display: flex; flex-direction: column; gap: 8px; background: var(--gw-soft); }
+.gw-proposal-card { display: flex; flex-direction: column; gap: 6px; cursor: pointer; padding: 12px; background: transparent; transition: border-color .15s, background .15s; }
+.gw-proposal-card:hover { background: var(--gw-soft-2); }
+.gw-card-active { border-color: var(--gw-accent); background: var(--gw-accent-soft) !important; }
+.gw-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.gw-card-title { font-weight: 600; font-size: 12.5px; text-transform: uppercase; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.gw-review-detail { flex: 1; min-width: 0; overflow-y: auto; }
+.gw-detail { max-width: 1100px; margin: 0 auto; padding: 22px 24px 40px; display: flex; flex-direction: column; gap: 14px; }
+.gw-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.gw-detail-title { font-size: 17px; font-weight: 700; letter-spacing: -.01em; margin-bottom: 6px; text-transform: uppercase; }
+.gw-callout { display: flex; align-items: flex-start; gap: 9px; padding: 10px 12px; border-radius: var(--gw-radius); font-size: 13px; }
+.gw-callout .gw-icon { margin-top: 1px; }
+.gw-callout-info { background: var(--gw-accent-soft); }
+.gw-callout-warn { background: color-mix(in oklab, var(--gw-warn) 14%, transparent); }
+.gw-checks { display: flex; flex-direction: column; gap: 6px; }
+.gw-check { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.gw-check-name { font-weight: 600; text-transform: capitalize; }
+.gw-checks-ok { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--gw-good); }
+.gw-changes { display: flex; flex-direction: column; gap: 16px; }
+.gw-change { border: 1px solid var(--gw-line); border-radius: 12px; overflow: hidden; }
+.gw-change-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--gw-line); background: var(--gw-soft); }
+.gw-change-heading { font-weight: 650; text-transform: uppercase; font-size: 12.5px; }
+.gw-diff { display: grid; grid-template-columns: 1fr 1fr; }
+.gw-diff-single { grid-template-columns: 1fr; }
+.gw-diff-col { min-width: 0; }
+.gw-diff-col + .gw-diff-col { border-left: 1px solid var(--gw-line); }
+.gw-diff-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; padding: 7px 14px; }
+.gw-diff-before .gw-diff-label { color: var(--gw-bad); background: color-mix(in oklab, var(--gw-bad) 7%, transparent); }
+.gw-diff-after .gw-diff-label { color: var(--gw-good); background: color-mix(in oklab, var(--gw-good) 8%, transparent); }
+.gw-pre { margin: 0; padding: 12px 14px; white-space: pre-wrap; word-break: break-word; font-family: var(--gw-font, 'Courier Prime', monospace); font-size: 12.5px; line-height: 1.45; max-height: 460px; overflow: auto; }
+.gw-preview { max-height: 200px; border-radius: 8px; background: var(--gw-soft); border: 1px solid var(--gw-line); }
+
+/* --- empty states, loading, welcome --- */
+.gw-empty { margin: auto; max-width: 440px; padding: 40px 24px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.gw-empty-icon { width: 48px; height: 48px; border-radius: 14px; display: inline-flex; align-items: center; justify-content: center; background: var(--gw-accent-soft); color: var(--gw-accent); margin-bottom: 4px; }
+.gw-empty-title { font-weight: 700; font-size: 15px; }
+.gw-empty-text { color: var(--gw-muted); font-size: 13px; margin-bottom: 6px; }
+.gw-loading { margin: auto; display: flex; align-items: center; gap: 10px; color: var(--gw-muted); padding: 40px; }
+.gw-spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--gw-line-strong); border-top-color: var(--gw-accent); animation: gw-spin .8s linear infinite; }
+.gw-welcome { margin: auto; max-width: 760px; padding: 40px 24px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 12px; animation: gw-fade .3s ease-out; }
+.gw-welcome-mark { width: 60px; height: 60px; border-radius: 18px; display: inline-flex; align-items: center; justify-content: center; color: #fff; background: linear-gradient(135deg, #8b7bff, #5b45e0); box-shadow: 0 10px 30px rgba(91,69,224,.4); margin-bottom: 6px; }
+.gw-welcome-title { margin: 0; font-size: 28px; font-weight: 750; letter-spacing: -.03em; line-height: 1.15; }
+.gw-welcome-text { margin: 0 0 14px; max-width: 520px; color: var(--gw-muted); font-size: 14.5px; }
+.gw-welcome-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; width: 100%; }
+.gw-welcome-card { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; cursor: pointer; transition: border-color .15s, transform .15s, box-shadow .15s; }
+.gw-welcome-card:hover { border-color: var(--gw-accent); transform: translateY(-2px); box-shadow: var(--gw-shadow); }
+
+/* --- modal --- */
+.gw-modal-backdrop { position: absolute; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(10,10,20,.45); backdrop-filter: blur(3px); animation: gw-fade .15s ease-out; }
+.gw-modal { width: 100%; max-width: 520px; max-height: 100%; display: flex; flex-direction: column; border-radius: 14px; border: 1px solid var(--gw-line-strong); background: var(--gw-surface); color: var(--gw-surface-fg); box-shadow: 0 24px 70px rgba(0,0,0,.4); animation: gw-pop .18s ease-out; }
+.gw-modal-wide { max-width: 760px; }
+.gw-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 4px 20px; }
+.gw-modal-title { font-size: 16px; font-weight: 700; letter-spacing: -.01em; }
+.gw-modal-body { padding: 10px 20px 4px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
+.gw-modal-text { margin: 0; color: var(--gw-muted); font-size: 13.5px; }
+.gw-modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 20px 18px; }
+.gw-file-pill { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; padding: 6px 12px; border-radius: 999px; background: var(--gw-soft-2); font-weight: 600; }
+.gw-details-plain > summary { cursor: pointer; color: var(--gw-muted); font-size: 12.5px; margin-bottom: 8px; }
+
+/* --- toast --- */
+.gw-toasts { position: absolute; left: 0; right: 0; bottom: 18px; z-index: 120; display: flex; justify-content: center; pointer-events: none; }
+.gw-toast { pointer-events: auto; display: flex; align-items: center; gap: 10px; max-width: min(640px, calc(100% - 32px)); padding: 9px 9px 9px 14px; border-radius: 12px; background: #23233a; color: #f2f2f8; box-shadow: 0 12px 34px rgba(0,0,0,.35); animation: gw-up .22s ease-out; transition: opacity .35s, transform .35s; }
+.gw-toast .gw-btn { color: #f2f2f8; border-color: rgba(255,255,255,.25); background: rgba(255,255,255,.08); }
+.gw-toast .gw-icon-btn { color: rgba(255,255,255,.7); }
+.gw-toast-ok > .gw-icon { color: #4ad295; }
+.gw-toast-err > .gw-icon { color: #ff8a80; }
+.gw-toast-text { flex: 1; font-size: 13px; }
+.gw-toast-leave { opacity: 0; transform: translateY(8px); }
+
+/* --- assistant rail --- */
+.gw-rail { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.gw-rail-head { display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 12px; border-bottom: 1px solid var(--gw-line); flex: none; }
+.gw-rail-title { display: flex; align-items: center; gap: 6px; font-weight: 700; color: var(--gw-accent); flex: none; }
+.gw-tabs { flex: 1; min-width: 0; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.gw-tab-pill { display: inline-flex; align-items: center; gap: 2px; height: 26px; padding: 0 4px 0 10px; border-radius: 999px; cursor: pointer; font-size: 12px; font-weight: 550; color: var(--gw-muted); white-space: nowrap; max-width: 170px; }
+.gw-tab-pill:hover { background: var(--gw-soft-2); }
+.gw-tab-pill-active { background: var(--gw-soft-2); color: inherit; }
+.gw-tab-pill-title { overflow: hidden; text-overflow: ellipsis; padding-right: 6px; }
+.gw-tab-pill-x { width: 18px; height: 18px; border: none; border-radius: 50%; background: transparent; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; color: var(--gw-muted); }
+.gw-tab-pill-x:hover { background: var(--gw-line-strong); color: inherit; }
+.gw-add-wrap { position: relative; }
+.gw-chat-wrap { flex: 1; min-height: 0; flex-direction: column; }
+.gw-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.gw-chat-list { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 14px; display: flex; flex-direction: column; gap: 14px; }
+.gw-chat-welcome { margin: auto 0; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 10px 6px; }
+.gw-chat-hello { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+.gw-suggestions { display: flex; flex-direction: column; gap: 7px; width: 100%; margin-top: 10px; }
+.gw-suggestion { text-align: left; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--gw-line); background: var(--gw-soft); cursor: pointer; font-size: 12.5px; transition: border-color .15s, background .15s; }
+.gw-suggestion:hover { border-color: var(--gw-accent); background: var(--gw-accent-soft); }
+.gw-msg { display: flex; gap: 9px; align-items: flex-start; animation: gw-up .18s ease-out; }
+.gw-msg-user { justify-content: flex-end; }
+.gw-msg-text { max-width: 88%; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.gw-msg-user .gw-msg-text { padding: 8px 12px; border-radius: 14px 14px 4px 14px; background: var(--gw-accent); color: #fff; white-space: pre-wrap; }
+.gw-msg-asst .gw-msg-text { padding-top: 3px; }
+.gw-msg-asst .gw-msg-text p { margin: 0 0 8px; }
+.gw-msg-asst .gw-msg-text p:last-child { margin-bottom: 0; }
+.gw-msg-asst .gw-msg-text ul, .gw-msg-asst .gw-msg-text ol { margin: 0 0 8px; padding-left: 20px; }
+.gw-msg-asst .gw-msg-text code { font-size: 12px; padding: 1px 5px; border-radius: 4px; background: var(--gw-soft-2); }
+.gw-chat-code { margin: 0 0 8px; padding: 10px 12px; border-radius: 8px; background: var(--gw-paper, #dcebf0); color: var(--gw-ink); font-family: var(--gw-font, 'Courier Prime', monospace); font-size: 12px; white-space: pre-wrap; overflow-x: auto; }
+.gw-chat-avatar { width: 26px; height: 26px; flex: none; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: #fff; background: linear-gradient(135deg, #8b7bff, #5b45e0); }
+.gw-chat-avatar-lg { width: 44px; height: 44px; border-radius: 13px; margin-bottom: 4px; }
+.gw-typing { display: inline-flex; gap: 4px; padding: 6px 0; }
+.gw-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--gw-muted); animation: gw-bounce 1.1s infinite ease-in-out; }
+.gw-typing i:nth-child(2) { animation-delay: .15s; }
+.gw-typing i:nth-child(3) { animation-delay: .3s; }
+.gw-chat-err { margin: 0 12px 8px; }
+.gw-composer { flex: none; padding: 8px 12px 10px; border-top: 1px solid var(--gw-line); display: flex; flex-direction: column; gap: 6px; }
+.gw-composer-context { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--gw-muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.gw-composer-context strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.gw-composer-box { display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 6px 12px; border-radius: 12px; border: 1px solid var(--gw-line-strong); background: var(--gw-field); transition: border-color .15s, box-shadow .15s; }
+.gw-composer-box:focus-within { border-color: var(--gw-accent); box-shadow: 0 0 0 3px var(--gw-accent-soft); }
+.gw-composer-field { flex: 1; min-height: 22px; max-height: 180px; border: none; background: transparent; resize: none; outline: none; padding: 4px 0; line-height: 1.45; }
+.gw-send { width: 32px; height: 32px; flex: none; border-radius: 9px; border: none; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; background: var(--gw-accent); color: #fff; transition: background .15s, opacity .15s; }
+.gw-send:hover:not(:disabled) { background: var(--gw-accent-strong); }
+.gw-send:disabled { opacity: .35; cursor: default; }
+.gw-composer-hint { font-size: 10.5px; color: var(--gw-muted); text-align: center; }
+
+/* --- focus mode --- */
+.gw-focus .gw-topbar { height: 44px; }
+.gw-focus .gw-nav, .gw-focus .gw-dd, .gw-focus .gw-statusbar, .gw-focus .gw-outline { display: none; }
+.gw-focus .hsp-full { box-shadow: 0 0 0 1px var(--gw-line); }
+
+.gw-root[data-theme="dark"] { --gw-surface: #1f2029; --gw-surface-fg: #ececf1; --gw-field: rgba(255,255,255,.04); --gw-accent: #8f81ff; --gw-accent-strong: #7d6dff; }
+@keyframes gw-fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes gw-pop { from { opacity: 0; transform: translateY(-4px) scale(.98) } to { opacity: 1; transform: none } }
+@keyframes gw-up { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: none } }
+@keyframes gw-spin { to { transform: rotate(360deg) } }
+@keyframes gw-bounce { 0%, 80%, 100% { transform: translateY(0); opacity: .45 } 40% { transform: translateY(-4px); opacity: 1 } }
+@media (prefers-reduced-motion: reduce) { .gw-root * { animation: none !important; transition: none !important; } }
+@media (max-width: 900px) { .gw-welcome-cards { grid-template-columns: 1fr; } .gw-grid2 { grid-template-columns: 1fr; } .gw-nav-item span { display: none; } .gw-review-list { width: 220px; } .gw-diff { grid-template-columns: 1fr; } }
 `
 
 // ---------- Ghostwriter chat (project-scoped, multi-tab, resizable) ----------
@@ -2098,7 +2356,7 @@ async function getSessionByTitle(title) {
   return host.request('session.create', { title })
 }
 
-function projectContextBlock(project) {
+function projectContextBlock(project, focusScene) {
   const scenes = (project && Array.isArray(project.scenes)) ? project.scenes : []
   const lines = scenes.map((s, i) =>
     '  ' + (i + 1) + '. ' + (s.heading || '(untitled)') + ' [scene id: ' + (s.id || '') + ']')
@@ -2108,6 +2366,7 @@ function projectContextBlock(project) {
     'Project title: ' + (project.title || ''),
     'Current scenes (' + scenes.length + '):',
     lines.length ? lines.join('\n') : '  (none yet)',
+    focusScene ? 'The writer is currently looking at: ' + (focusScene.heading || '(untitled)') + ' [scene id: ' + focusScene.id + '] — "this scene" means this one.' : '',
     '[/Ghostwriter context]',
   ].join('\n')
 }
@@ -2160,7 +2419,7 @@ function saveChatWidth(w) {
   try { if (typeof localStorage !== 'undefined') localStorage.setItem(CHAT_WIDTH_KEY, String(w)) } catch (_) {}
 }
 
-function GwChat({ project, sessionTitle, onTurnDone }) {
+function GwChat({ project, sessionTitle, onTurnDone, focusScene, seed, active }) {
   const [sid, setSid] = useState(null)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -2244,41 +2503,123 @@ function GwChat({ project, sessionTitle, onTurnDone }) {
     setBusy(true); setWaiting(true); setInput(''); setError(null)
     setMessages((m) => [...m, { role: 'user', text }])
     try {
-      await host.request('prompt.submit', { session_id: sid, text: projectContextBlock(project) + '\n' + text })
+      await host.request('prompt.submit', { session_id: sid, text: projectContextBlock(project, focusScene).replace(/\n\n/g, '\n') + '\n' + text })
     } catch (e) {
       setBusy(false); setWaiting(false); setStreaming(false)
       setError('Send failed: ' + errInfo(e).text)
     }
   }
 
+  // Pre-fill the box from "Ask about this scene" / "New scene" shortcuts.
+  const fieldRef = useRef(null)
+  useEffect(() => {
+    if (!seed || !active) return
+    setInput(seed.text)
+    setTimeout(() => {
+      const el = fieldRef.current
+      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) }
+    }, 0)
+  }, [seed && seed.n, active]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Auto-grow the composer.
+  useEffect(() => {
+    const el = fieldRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(180, el.scrollHeight) + 'px'
+  }, [input])
+
   const live = waiting || streaming || streamText
   const empty = messages.length === 0 && !live
+  const hasScenes = project && Array.isArray(project.scenes) && project.scenes.length > 0
+  const suggestions = hasScenes ? [
+    focusScene ? 'Tighten the dialogue in this scene' : 'Tighten the dialogue in the first scene',
+    'Write the next scene',
+    'Give me three title ideas',
+    'What would make the ending land harder?',
+  ] : [
+    'Write an opening scene: a stranger walks into an all-night diner',
+    'Help me outline a 10-page short',
+    'Add a title page with my name',
+  ]
   return jsxs('div', { className: 'gw-chat', children: [
-    jsx('div', { className: 'gw-chat-list', ref: listRef, children:
-      empty
-        ? jsx('div', { className: 'gw-chat-empty', children: 'Say something — e.g. “write a cold open for scene 1” or “tighten the dialogue in the café scene.”' })
-        : messages.map((m, i) => jsx('div', {
-            className: 'gw-msg ' + (m.role === 'user' ? 'gw-msg-user' : 'gw-msg-asst'), key: i,
-            children: jsx('div', { className: 'gw-msg-text', children: m.text })
-          }))
-    }),
-    live && jsx('div', { className: 'gw-msg gw-msg-asst', children: jsx('div', {
-      className: 'gw-msg-text', children: (streamText ? streamText + '▍' : 'Thinking…')
-    }) }),
-    error ? jsx('div', { className: 'hsp-notice hsp-notice-err gw-chat-err', children: error }) : null,
-    jsxs('div', { className: 'gw-chat-input', children: [
-      jsx('textarea', {
-        className: 'gw-chat-field', value: input, rows: '2',
-        placeholder: 'Message Ghostwriter… (Enter to send, Shift+Enter for a newline)',
-        onChange: (e) => setInput(e.target.value),
-        onKeyDown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }
-      }),
-      jsx('button', { className: 'hsp-btn hsp-btn-primary gw-chat-send', disabled: busy || !input.trim(), onClick: send, children: busy ? '…' : 'Send' })
-    ] })
+    jsx('div', { className: 'gw-chat-list', ref: listRef, children: empty
+      ? jsxs('div', { className: 'gw-chat-welcome', children: [
+          jsx('div', { className: 'gw-chat-avatar gw-chat-avatar-lg', children: jsx(Icon, { name: 'sparkles', size: 20 }) }),
+          jsx('div', { className: 'gw-chat-hello', children: 'What are we writing?' }),
+          jsx('div', { className: 'gw-muted gw-small', children: 'Describe a scene, a change or a question. I write in proper screenplay format and you can undo anything.' }),
+          jsx('div', { className: 'gw-suggestions', children: suggestions.map((t) => jsx('button', {
+            className: 'gw-suggestion', key: t, onClick: () => { setInput(t); if (fieldRef.current) fieldRef.current.focus() }, children: t })) }),
+        ] })
+      : messages.map((m, i) => jsx(ChatMessage, { role: m.role, text: m.text, key: i })) }),
+    live ? jsx(ChatMessage, { role: 'assistant', text: streamText, typing: !streamText }) : null,
+    error ? jsxs('div', { className: 'gw-callout gw-callout-warn gw-chat-err', children: [jsx(Icon, { name: 'alert', size: 15 }), error] }) : null,
+    jsxs('div', { className: 'gw-composer', children: [
+      focusScene ? jsxs('div', { className: 'gw-composer-context', title: 'The assistant knows which scene you are looking at', children: [
+        jsx(Icon, { name: 'eye', size: 13 }), 'Looking at: ', jsx('strong', { children: focusScene.heading || 'untitled scene' })] }) : null,
+      jsxs('div', { className: 'gw-composer-box', children: [
+        jsx('textarea', {
+          ref: fieldRef, className: 'gw-composer-field', value: input, rows: 1,
+          placeholder: sid ? 'Ask for a scene, a rewrite, a note…' : 'Connecting…',
+          disabled: !sid,
+          onChange: (e) => setInput(e.target.value),
+          onKeyDown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } },
+        }),
+        jsx('button', { className: 'gw-send', disabled: busy || !input.trim() || !sid, onClick: send, title: 'Send (Enter)', 'aria-label': 'Send',
+          children: jsx(Icon, { name: 'send', size: 16 }) }),
+      ] }),
+      jsx('div', { className: 'gw-composer-hint', children: 'Enter to send · Shift+Enter for a new line' }),
+    ] }),
   ] })
 }
 
-function GwChatRail({ projects, currentPid, currentData, onClose, onTurnDone }) {
+// Minimal, safe formatting for replies: paragraphs, bullet/numbered lists,
+// **bold**, *italic*, `code`, and fenced blocks (shown in screenplay type).
+function inlineMd(text, keyBase) {
+  const out = []
+  const re = /(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|`[^`]+`)/g
+  let last = 0, m, k = 0
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push(text.slice(last, m.index))
+    const t = m[0]
+    if (t.startsWith('**')) out.push(jsx('strong', { key: keyBase + '-' + k++, children: t.slice(2, -2) }))
+    else if (t.startsWith('`')) out.push(jsx('code', { key: keyBase + '-' + k++, children: t.slice(1, -1) }))
+    else out.push(jsx('em', { key: keyBase + '-' + k++, children: t.slice(1, -1) }))
+    last = m.index + t.length
+  }
+  if (last < text.length) out.push(text.slice(last))
+  return out
+}
+function MdText({ text }) {
+  const blocks = []
+  const parts = String(text || '').split(/```[a-zA-Z]*\n?/)
+  parts.forEach((part, pi) => {
+    if (pi % 2 === 1) { blocks.push(jsx('pre', { className: 'gw-chat-code', key: 'c' + pi, children: part.replace(/\n$/, '') })); return }
+    part.split(/\n{2,}/).forEach((para, i) => {
+      const lines = para.split('\n').filter((l) => l.trim() !== '')
+      if (!lines.length) return
+      const key = pi + '-' + i
+      if (lines.every((l) => /^\s*([-*•]|\d+[.)])\s+/.test(l))) {
+        const ordered = /^\s*\d/.test(lines[0])
+        blocks.push(jsx(ordered ? 'ol' : 'ul', { key, children: lines.map((l, j) =>
+          jsx('li', { key: j, children: inlineMd(l.replace(/^\s*([-*•]|\d+[.)])\s+/, ''), key + j) })) }))
+      } else {
+        blocks.push(jsx('p', { key, children: lines.flatMap((l, j) => j ? [jsx('br', { key: 'b' + j }), ...inlineMd(l, key + j)] : inlineMd(l, key + j)) }))
+      }
+    })
+  })
+  return blocks
+}
+function ChatMessage({ role, text, typing }) {
+  const user = role === 'user'
+  return jsxs('div', { className: 'gw-msg ' + (user ? 'gw-msg-user' : 'gw-msg-asst'), children: [
+    user ? null : jsx('div', { className: 'gw-chat-avatar', children: jsx(Icon, { name: 'sparkles', size: 14 }) }),
+    jsx('div', { className: 'gw-msg-text', children: typing
+      ? jsxs('span', { className: 'gw-typing', 'aria-label': 'Thinking', children: [jsx('i', {}), jsx('i', {}), jsx('i', {})] })
+      : (user ? text : jsx(MdText, { text })) }),
+  ] })
+}
+
+function GwChatRail({ projects, currentPid, currentData, onClose, onTurnDone, focusScene, seed }) {
   const [tabs, setTabs] = useState(() => loadChatTabs(projects, currentPid))
   const [activeKey, setActiveKey] = useState(() => {
     const t = loadChatTabs(projects, currentPid)
@@ -2388,50 +2729,43 @@ function GwChatRail({ projects, currentPid, currentData, onClose, onTurnDone }) 
 
   return jsxs('div', { className: 'gw-rail', children: [
     jsxs('div', { className: 'gw-rail-head', children: [
+      jsx('div', { className: 'gw-rail-title', children: [jsx(Icon, { name: 'sparkles', size: 15, key: 'i' }), jsx('span', { key: 't', children: 'Assistant' })] }),
       jsx('div', { className: 'gw-tabs', children: tabs.map((t) => jsxs('div', {
-        className: 'gw-tab' + (t.id === activeKey ? ' gw-tab-active' : ''),
+        className: 'gw-tab-pill' + (t.id === activeKey ? ' gw-tab-pill-active' : ''),
         key: t.id, onClick: () => setActiveKey(t.id), title: sessionTitleForTab(t),
         children: [
-          jsx('span', { className: 'gw-tab-title', children: (t.title || 'Untitled') + (t.num > 1 ? ' · ' + t.num : '') }),
-          jsx('button', {
-            className: 'gw-tab-x', title: 'Close this chat',
-            onClick: (e) => { e.stopPropagation(); closeTab(t.id) }, children: '×'
-          }),
-        ]
-      })) }),
+          jsx('span', { className: 'gw-tab-pill-title', children: (t.title || 'Untitled') + (t.num > 1 ? ' · ' + t.num : '') }),
+          tabs.length > 1 ? jsx('button', { className: 'gw-tab-pill-x', title: 'Close this chat', 'aria-label': 'Close this chat',
+            onClick: (e) => { e.stopPropagation(); closeTab(t.id) }, children: jsx(Icon, { name: 'x', size: 12 }) }) : null,
+        ] })) }),
       jsxs('div', { className: 'gw-add-wrap', ref: addWrapRef, children: [
-        jsx('button', { className: 'gw-add-btn', title: 'New chat',
-          onClick: (e) => { e.stopPropagation(); setMenuOpen((v) => !v) }, children: '＋' }),
-        menuOpen ? jsxs('div', { className: 'gw-add-menu', children: [
-          activeTab ? jsx('button', { className: 'gw-add-item gw-add-item-primary',
-            onClick: () => newChatForProject(activeTab.projectId),
-            children: jsx('span', { className: 'gw-add-label', children: 'New chat · ' + (activeTab.title || 'Untitled') }) }) : null,
-          (activeTab && allProjects.length) ? jsx('div', { className: 'gw-add-sep' }) : null,
-          allProjects.map((p) => {
-            const openCount = tabs.filter((t) => t.projectId === p.id).length
-            return jsx('button', { className: 'gw-add-item', key: p.id,
-              onClick: () => openProjectTab(p.id),
-              children: [
-                (p.id === activeProjectId) ? jsx('span', { className: 'gw-add-dot' }) : null,
-                jsx('span', { className: 'gw-add-label', children: (p.title || 'Untitled') + (openCount > 1 ? '  (' + openCount + ')' : '') })
-              ] })
-          })
+        jsx('button', { className: 'gw-icon-btn', title: 'New chat', 'aria-label': 'New chat',
+          onClick: (e) => { e.stopPropagation(); setMenuOpen((v) => !v) }, children: jsx(Icon, { name: 'plus' }) }),
+        menuOpen ? jsxs('div', { className: 'gw-menu gw-menu-right', children: [
+          activeTab ? jsxs('button', { className: 'gw-menu-item', onClick: () => newChatForProject(activeTab.projectId),
+            children: [jsx(Icon, { name: 'chat', size: 15 }), jsx('span', { children: 'New chat about ' + (activeTab.title || 'this project') })] }) : null,
+          allProjects.length > 1 ? jsx('div', { className: 'gw-menu-sep' }) : null,
+          allProjects.length > 1 ? jsx('div', { className: 'gw-menu-label', children: 'Chat about another project' }) : null,
+          allProjects.length > 1 ? allProjects.filter((p) => p.id !== activeProjectId).map((p) => jsxs('button', { className: 'gw-menu-item', key: p.id,
+            onClick: () => openProjectTab(p.id), children: [jsx(Icon, { name: 'film', size: 15 }), jsx('span', { children: p.title || 'Untitled' })] })) : null,
         ] }) : null,
       ] }),
-      jsx('button', { className: 'gw-close-btn', title: 'Close chat', onClick: onClose, children: '✕' }),
+      jsx('button', { className: 'gw-icon-btn', title: 'Hide the assistant', 'aria-label': 'Hide the assistant', onClick: onClose, children: jsx(Icon, { name: 'x' }) }),
     ] }),
-    // Every tab's chat stays mounted (hidden when not active) so a background
+    // Every tab's chat stays mounted (hidden when inactive) so a background
     // chat keeps streaming while you work in another.
     tabs.map((t) => {
       const pd = projData[t.projectId]
       if (!pd) return null
+      const isActive = t.id === activeKey
       return jsx('div', {
-        key: t.id,
-        style: { display: (t.id === activeKey) ? 'flex' : 'none', flexDirection: 'column', flex: '1 1 0%', minHeight: 0 },
-        children: jsx(GwChat, { project: pd, sessionTitle: sessionTitleForTab(t), onTurnDone })
+        key: t.id, className: 'gw-chat-wrap', style: { display: isActive ? 'flex' : 'none' },
+        children: jsx(GwChat, { project: pd, sessionTitle: sessionTitleForTab(t), onTurnDone, active: isActive,
+          focusScene: t.projectId === currentPid ? focusScene : null,
+          seed: isActive ? seed : null })
       })
     }),
-    !tabs.length ? jsx('div', { className: 'gw-chat-empty', style: { padding: 16 }, children: 'No project selected.' }) : null,
+    !tabs.length ? jsx('div', { className: 'gw-muted gw-pad', children: 'No project selected.' }) : null,
   ] })
 }
 
