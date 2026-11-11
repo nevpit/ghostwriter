@@ -3,6 +3,9 @@
 - `ghostwriter-logo-dark.png` — white line art on a transparent background, for **dark** themes.
 - `ghostwriter-logo-light.png` — black line art on a transparent background, for **light** themes.
 
+Next to the "Ghostwriter" name (top bar, assistant header) the white logo sits on an
+electric-blue disc, matching the History avatars, so it reads on any theme.
+
 `desktop/plugin.js` embeds both (the `LOGO_IMG` table, used by the `Logo` component):
 a 256 px cut for large placements (welcome screen) and a 64 px cut with slightly heavier
 strokes for 16–28 px placements (top bar, buttons, avatars), where the original line weight

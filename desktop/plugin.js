@@ -1343,7 +1343,7 @@ function ScreenplayPane() {
   const topbar = jsxs('header', { className: 'gw-topbar', children: [
     jsxs('div', { className: 'gw-topbar-left', children: [
       jsxs('div', { className: 'gw-brand', children: [
-        jsx('span', { className: 'gw-brand-mark', children: jsx(Logo, { size: 26 }) }),
+        jsx('span', { className: 'gw-brand-mark', children: jsx(Logo, { size: 20, tone: 'white' }) }),
         jsx('span', { className: 'gw-brand-name', children: 'Ghostwriter' }),
       ] }),
       projects.length ? jsx(ProjectPicker, {
@@ -2018,7 +2018,8 @@ const CSS = `
 .gw-topbar-left, .gw-topbar-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .gw-topbar-right { justify-content: flex-end; }
 .gw-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; letter-spacing: -.01em; }
-.gw-brand-mark { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; }
+.gw-brand-mark { width: 30px; height: 30px; flex: none; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--gw-brand-grad); box-shadow: 0 2px 8px rgba(56,71,255,.35); }
+.gw-brand-mark-sm { width: 24px; height: 24px; box-shadow: 0 1px 4px rgba(56,71,255,.3); }
 .gw-logo { display: block; flex: none; user-select: none; }
 .gw-root[data-theme="dark"] .gw-logo-for-light, .gw-root[data-theme="light"] .gw-logo-for-dark { display: none; }
 .gw-nav { position: absolute; top: 50%; left: calc(var(--gw-left, 0px) + (100% - var(--gw-left, 0px) - var(--gw-right, 0px)) / 2); transform: translate(-50%, -50%); z-index: 2; display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--gw-soft); border: 1px solid var(--gw-line); transition: left .2s ease; }
@@ -2773,7 +2774,7 @@ function GwChatRail({ projects, currentPid, currentData, onClose, onTurnDone, fo
 
   return jsxs('div', { className: 'gw-rail', children: [
     jsxs('div', { className: 'gw-rail-head', children: [
-      jsx('div', { className: 'gw-rail-title', children: [jsx(Logo, { size: 20, key: 'i' }), jsx('span', { key: 't', children: 'Ghostwriter' })] }),
+      jsx('div', { className: 'gw-rail-title', children: [jsx('span', { className: 'gw-brand-mark gw-brand-mark-sm', key: 'i', children: jsx(Logo, { size: 16, tone: 'white' }) }), jsx('span', { key: 't', children: 'Ghostwriter' })] }),
       jsx('div', { className: 'gw-tabs', children: tabs.map((t) => jsxs('div', {
         className: 'gw-tab-pill' + (t.id === activeKey ? ' gw-tab-pill-active' : ''),
         key: t.id, onClick: () => setActiveKey(t.id), title: sessionTitleForTab(t),
