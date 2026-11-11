@@ -163,7 +163,7 @@ def _set_title_page(args):
     fields = args.get("fields")
     if not isinstance(fields, dict):
         raise M.ServiceError(M.ERR_VALIDATION, "fields must be an object, e.g. {\"Title\": \"...\"}")
-    rev = svc.set_title_page(args["project_id"], fields)
+    rev = svc.set_title_page(args["project_id"], fields, origin=M.ORIGIN_ASSISTANT)
     return _ok(title_page=svc.outline(args["project_id"])["title_page"], revision_id=rev.id)
 
 
@@ -182,7 +182,7 @@ def _update_rules(args):
 def _find_replace(args):
     out = get_service().find_replace(args["project_id"], args.get("query", ""),
                                      args.get("replacement", ""), args.get("target", "all"),
-                                     revision_id=args.get("revision_id"))
+                                     revision_id=args.get("revision_id"), origin=M.ORIGIN_ASSISTANT)
     return _ok(**out)
 
 
