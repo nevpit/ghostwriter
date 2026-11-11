@@ -5,6 +5,7 @@ the same way and mount its ``router`` in a TestClient. Handlers return the data
 object/array directly (no ``success`` wrapper); errors are ``HTTPException`` ->
 4xx with a structured ``detail``.
 """
+import base64
 import importlib.util
 import _bootstrap as B
 
@@ -78,6 +79,19 @@ def test_pdf_binary():
     assert r.headers["content-type"] == "application/pdf"
     assert r.content[:4] == b"%PDF"
     assert "attachment" in r.headers.get("content-disposition", "")
+
+
+def test_pdf_preview_returns_export_bytes_over_json():
+    pid = _seed()
+    response = _client().get(f"/projects/{pid}/pdf/preview")
+    assert response.status_code == 200
+    preview = response.json()
+    content = base64.b64decode(preview["content_b64"], validate=True)
+    assert content.startswith(b"%PDF")
+    assert preview["size_bytes"] == len(content)
+    assert preview["filename"].endswith(".pdf")
+    assert preview["page_count"] > 0
+    assert "path" not in preview
 
 
 def test_error_404_structured():

@@ -4,10 +4,9 @@ This module is **exec'd** (not imported) in the Hermes web-server process. It
 must expose a module-level ``router`` (a FastAPI ``APIRouter``); the web server
 mounts it at ``/api/plugins/ghostwriter/<route>``.
 
-The desktop pane reaches these routes through ``window.hermesDesktop.api``,
-which injects the gateway ticket and returns the unwrapped JSON body, so
-handlers return bare objects/arrays; errors raise ``HTTPException`` with a
-structured ``detail`` (``{"code", "message", "details"}``).
+The desktop pane uses the SDK's scoped REST client. JSON handlers return bare
+objects and arrays. Errors raise ``HTTPException`` with a structured
+``detail`` (``{"code", "message", "details"}``).
 """
 from __future__ import annotations
 
@@ -258,8 +257,7 @@ def export_pdf(project_id: str, revision_id: Optional[str] = None):
 
 @router.get("/projects/{project_id}/pdf/meta")
 def export_pdf_meta(project_id: str, revision_id: Optional[str] = None):
-    """Render the PDF and return its location (the desktop reads the file via
-    the bridge's ``readFileDataUrl``; the ``api`` bridge is JSON-only)."""
+    """Render the PDF and return the artifact's metadata."""
     svc = get_service()
     exp = _guard(svc.export_pdf, project_id, revision_id=revision_id)
     path = Path(exp.artifact_path)
@@ -267,6 +265,16 @@ def export_pdf_meta(project_id: str, revision_id: Optional[str] = None):
             "path": exp.artifact_path, "filename": svc.pdf_filename(project_id),
             "size_bytes": path.stat().st_size if path.exists() else None,
             "page_count": exp.page_count}
+
+
+@router.get("/projects/{project_id}/pdf/preview")
+def preview_pdf(project_id: str, revision_id: Optional[str] = None):
+    """Return the generated PDF through the SDK's JSON REST transport."""
+    svc = get_service()
+    exp = _guard(svc.export_pdf, project_id, revision_id=revision_id)
+    content = Path(exp.artifact_path).read_bytes()
+    return {"filename": svc.pdf_filename(project_id), "page_count": exp.page_count,
+            "size_bytes": len(content), "content_b64": base64.b64encode(content).decode("ascii")}
 
 
 @router.get("/projects/{project_id}/fountain")

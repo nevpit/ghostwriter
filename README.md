@@ -6,7 +6,8 @@ saves it to your project, and you read it — laid out like a real script page �
 in the Ghostwriter workspace next to the chat.
 
 Pure Python standard library + SQLite on the backend, a single-file desktop
-pane, no third-party runtime dependencies. Tested against **Hermes v0.22.7**.
+pane, no third-party runtime dependencies. Requires **Hermes Agent and
+Hermes Desktop v0.22.7 or later** for the desktop workspace.
 
 ## Features
 
@@ -35,7 +36,7 @@ pane, no third-party runtime dependencies. Tested against **Hermes v0.22.7**.
 ## Layout
 
 ```
-plugin.yaml              manifest (name, version, provides_tools)
+plugin.yaml              manifest (name, version, requires_hermes, provides_tools)
 __init__.py              register(ctx): agent tools + bundled skills
 screenplay/              backend package (stdlib only)
   fountain.py            Fountain parser, title page, scene splicing
@@ -83,11 +84,29 @@ hermes plugins enable ghostwriter
 hermes plugins doctor ghostwriter
 ```
 
-Agent tools appear in the next agent session; the desktop pane appears when the
-desktop app refreshes its plugin list. Data lives in
-`~/.hermes/plugin-data/ghostwriter/` (per profile; survives updates). A data
-directory from the plugin's previous name (`hermes-screenplay`) is adopted
-automatically.
+Agent tools appear in the next agent session. In Hermes Desktop, open
+**Capabilities → Plugins**, rescan if needed, and enable Ghostwriter for the
+active profile and in the Desktop UI. If the backend is unreachable after
+enabling, restart the gateway so it mounts the plugin's routes.
+
+## Data and network disclosure
+
+- **Model access.** The Desktop assistant sends your message, project title and
+  ID, scene headings and IDs, and focused-scene context to your active Hermes
+  gateway. Hermes routes the turn to its configured model provider, which may
+  also receive screenplay text, project rules, and other context returned by
+  Ghostwriter tools. Hermes handles provider credentials and chat history.
+- **Files and storage.** Desktop sends the contents of files you select for
+  import to the active gateway. SQLite projects, revisions, and generated export
+  files live in the profile's `plugin-data/ghostwriter/` directory on that
+  gateway. On first use Ghostwriter may inspect and move its previous
+  `plugin-data/hermes-screenplay/` directory to preserve existing projects.
+  Desktop keeps view preferences and assistant tab IDs in its local browser
+  storage. The Delete Project action permanently removes the project and its
+  revision history after you confirm.
+- **Desktop surfaces.** Ghostwriter registers a workspace route, sidebar
+  entry, command palette command and keybind. It uses scoped SDK REST for
+  project operations and exports, and gateway session RPCs and events for chat.
 
 ## Development
 
@@ -98,10 +117,10 @@ node --check desktop/plugin.js   # (as an ES module: node --input-type=module --
 
 Implementation notes:
 
-- The desktop pane calls the backend through `window.hermesDesktop.api(...)`,
-  which adds the gateway ticket and returns the unwrapped JSON body; the router
-  therefore returns bare objects and raises `HTTPException` with
-  `{"code", "message", "details"}` (`409` for stale writes).
+- Desktop uses `ctx.rest` for the plugin backend. The router returns bare JSON
+  objects and raises `HTTPException` with `{"code", "message", "details"}`
+  (`409` for stale writes). The PDF preview route delivers the generated PDF
+  and its metadata over the same scoped connection.
 - The agent process and the web-server process each open the same SQLite file;
   every revision commit is a compare-and-swap on the project's active revision.
 - Scene ids are stable across edits, so a proposal made on an older revision is

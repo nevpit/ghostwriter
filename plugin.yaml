@@ -1,5 +1,6 @@
 name: ghostwriter
 version: 0.1.0
+requires_hermes: ">=0.22.7"
 description: "Write screenplays by chatting with your model: industry-standard formatting, scene-level revisions with undo, Fountain / Final Draft / PDF import and export. Agent tools plus a desktop workspace; no third-party runtime dependencies."
 author: "Hermes"
 provides_tools:

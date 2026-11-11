@@ -1,19 +1,8 @@
-import { useQuery, useQueryClient, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, KEYBINDS_AREA, host } from '@hermes/plugin-sdk'
+import { useQuery, useQueryClient, useTheme, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, KEYBINDS_AREA, host } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useState, useMemo, useEffect, useRef, createContext, useContext } from 'react'
 
 const ID = 'ghostwriter'
-const API = `/api/plugins/${ID}`
-
-// The desktop API bridge is the sanctioned door to this plugin's backend. It
-// injects the native gateway ticket automatically, JSON-serializes `body`,
-// and resolves to the unwrapped JSON body (JSON-only: binary PDFs are
-// fetched separately via the bridge's readFileDataUrl for embedded viewing).
-async function api(path, opts = {}) {
-  const req = { path: `${API}${path}`, method: opts.method || 'GET' }
-  if (opts.body !== undefined) req.body = opts.body
-  return window.hermesDesktop.api(req)
-}
 
 // Extract a structured error code/message from a bridge rejection.
 function errInfo(e) {
@@ -603,7 +592,7 @@ const SceneActionsCtx = createContext(null)
 
 // ---------- main pane ----------
 
-function ScreenplayPane() {
+function ScreenplayPane({ api }) {
   const qc = useQueryClient()
   const [pid, setPid] = useState(null)
   const [tab, setTab] = useState('script')
@@ -635,23 +624,8 @@ function ScreenplayPane() {
   const [searchOpen, setSearchOpen] = useState(false)     // find/replace bar (Ctrl/Cmd+F)
   const [focusMode, setFocusMode] = useState(false)       // focus mode (hide chrome)
   const [chatSeed, setChatSeed] = useState(null)
-  // Follow the host theme: light text on the root means a dark theme.
   const rootRef = useRef(null)
-  const [theme, setTheme] = useState('dark')
-  useEffect(() => {
-    const el = rootRef.current
-    if (!el) return
-    const check = () => {
-      const m = getComputedStyle(el).color.match(/\d+(\.\d+)?/g)
-      if (!m) return
-      const [r, g, b] = m.map(Number)
-      setTheme((0.299 * r + 0.587 * g + 0.114 * b) > 140 ? 'dark' : 'light')
-    }
-    check()
-    const mo = new MutationObserver(check)
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] })
-    return () => mo.disconnect()
-  }, [])          // { text, n }: pre-fill the assistant's message box
+  const { renderedMode: theme } = useTheme()
   const searchRef = useRef(null)
   // Ctrl/Cmd+F summons the find bar; Escape on the input closes it.
   useEffect(() => {
@@ -1126,17 +1100,8 @@ function ScreenplayPane() {
     if (!pid) return
     setPdf({ loading: true, meta: null, dataUrl: null, error: null })
     try {
-      const meta = await api(`/projects/${pid}/pdf/meta`, { method: 'GET' })
-      let dataUrl = null
-      let readErr = null
-      try {
-        const r = await window.hermesDesktop.readFileDataUrl(meta.path)
-        if (typeof r === 'string' && r.startsWith('data:')) dataUrl = r
-        else if (r && r.ok === false) readErr = r.message
-      } catch (e) {
-        readErr = String(e)
-      }
-      setPdf({ loading: false, meta, dataUrl, error: readErr })
+      const { content_b64, ...meta } = await api(`/projects/${encodeURIComponent(pid)}/pdf/preview`)
+      setPdf({ loading: false, meta, dataUrl: `data:application/pdf;base64,${content_b64}`, error: null })
     } catch (e) {
       setPdf({ loading: false, meta: null, dataUrl: null, error: errInfo(e).text })
     }
@@ -1292,7 +1257,7 @@ function ScreenplayPane() {
       const a = document.createElement('a')
       a.href = url
       a.download = filename || 'script.fountain'
-      document.body.appendChild(a)
+      rootRef.current?.appendChild(a)
       a.click()
       a.remove()
       window.setTimeout(() => URL.revokeObjectURL(url), 2000)
@@ -1577,36 +1542,30 @@ function ScreenplayPane() {
 
   // Drag the divider to resize the chat column (width persists per user).
   function onResizeStart(e) {
+    if (e.button !== 0) return
     e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
     setResizing(true)
-    const onMove = (ev) => {
-      const el = splitRef.current
-      if (!el) return
-      const rect = el.getBoundingClientRect()
-      const w = Math.max(300, Math.min(Math.max(320, rect.width - 420), Math.round(rect.right - ev.clientX)))
-      setChatWidth(w)
-      saveChatWidth(w)
-    }
-    const onUp = () => {
-      setResizing(false)
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-      try { document.body.style.cursor = ''; document.body.style.userSelect = '' } catch (_) {}
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    try { document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none' } catch (_) {}
+  }
+
+  function onResizeMove(e) {
+    if (!e.currentTarget.hasPointerCapture(e.pointerId) || !splitRef.current) return
+    const rect = splitRef.current.getBoundingClientRect()
+    const width = Math.max(300, Math.min(Math.max(320, rect.width - 420), Math.round(rect.right - e.clientX)))
+    setChatWidth(width)
+    saveChatWidth(width)
   }
 
   // One stable tree whether or not the assistant is open, so opening it never
   // re-mounts the page (and loses the reading position).
   const scriptTab = jsxs('div', { className: 'gw-split', ref: splitRef, children: [
     jsx('div', { className: 'gw-split-main', key: 'main', children: scriptInner }),
-    chatOpen ? jsx('div', { className: 'gw-resize' + (resizing ? ' gw-resize-active' : ''), key: 'rz', onMouseDown: onResizeStart,
+    chatOpen ? jsx('div', { className: 'gw-resize' + (resizing ? ' gw-resize-active' : ''), key: 'rz',
+      onPointerDown: onResizeStart, onPointerMove: onResizeMove, onLostPointerCapture: () => setResizing(false),
       title: 'Drag to resize' }) : null,
     chatOpen ? jsx('div', { className: 'gw-chat-col', key: 'chat', style: { width: chatWidth + 'px' }, children:
       jsx(GwChatRail, {
-        projects, currentPid: pid, currentData: data, focusScene: scene, seed: chatSeed,
+        api, projects, currentPid: pid, currentData: data, focusScene: scene, seed: chatSeed,
         onClose: () => setChatOpen(false),
         onTurnDone: invalidateAll,
       }) }) : null,
@@ -1823,13 +1782,11 @@ function ScreenplayPane() {
           jsx('div', { className: 'gw-muted gw-small', children: `${pdf.meta.page_count} page${pdf.meta.page_count === 1 ? '' : 's'} · ${Math.max(1, Math.round((pdf.meta.size_bytes || 0) / 1024))} KB` }),
         ] }),
         jsxs('div', { className: 'gw-row', children: [
-          pdf.dataUrl ? jsxs('a', { className: 'gw-btn gw-btn-primary', href: pdf.dataUrl, download: pdf.meta.filename, children: [jsx(Icon, { name: 'download', size: 15 }), 'Download'] }) : null,
+          jsxs('a', { className: 'gw-btn gw-btn-primary', href: pdf.dataUrl, download: pdf.meta.filename, children: [jsx(Icon, { name: 'download', size: 15 }), 'Download'] }),
           iconBtn('x', 'Close preview', () => setPdf(null)),
         ] }),
       ] }),
-      pdf.dataUrl
-        ? jsx('iframe', { className: 'gw-pdf', src: pdf.dataUrl, title: `PDF: ${pdf.meta.filename}` })
-        : jsx('div', { className: 'gw-muted gw-small', children: `Saved to ${pdf.meta.path}${pdf.error ? ` (preview unavailable: ${pdf.error})` : ''}` }),
+      jsx('iframe', { className: 'gw-pdf', src: pdf.dataUrl, title: `PDF: ${pdf.meta.filename}` }),
     ] }) : null,
   ] })
 
@@ -1921,7 +1878,8 @@ function ScreenplayPane() {
   const connecting = !failed && !projectsQ.data && projectsQ.isPending
 
   return jsx(SearchCtx.Provider, { value: searchState, children: jsxs('div', {
-    className: 'gw-root hsp-pane' + (focusMode ? ' gw-focus' : ''), ref: rootRef, 'data-theme': theme,
+    className: 'gw-root hsp-pane' + (focusMode ? ' gw-focus' : '') + (resizing ? ' gw-dragging' : ''),
+    ref: rootRef, 'data-theme': theme,
     style: {
       '--gw-font': FONTS.script,
       '--gw-size': view.size + 'px',
@@ -2059,7 +2017,8 @@ const CSS = `
 .gw-workspace { flex: 1; min-height: 0; display: flex; }
 .gw-split { flex: 1; min-height: 0; display: flex; }
 .gw-split-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.gw-resize { width: 5px; flex: none; cursor: col-resize; position: relative; }
+.gw-resize { width: 5px; flex: none; cursor: col-resize; position: relative; touch-action: none; }
+.gw-root.gw-dragging, .gw-root.gw-dragging * { cursor: col-resize; user-select: none; }
 .gw-resize::after { content: ''; position: absolute; inset: 0 2px; background: var(--gw-line); transition: background .15s; }
 .gw-resize:hover::after, .gw-resize-active::after { background: var(--gw-accent); }
 .gw-chat-col { flex: none; min-width: 300px; display: flex; flex-direction: column; border-left: 1px solid var(--gw-line); }
@@ -2687,7 +2646,7 @@ function ChatMessage({ role, text, typing }) {
   ] })
 }
 
-function GwChatRail({ projects, currentPid, currentData, onClose, onTurnDone, focusScene, seed }) {
+function GwChatRail({ api, projects, currentPid, currentData, onClose, onTurnDone, focusScene, seed }) {
   const [tabs, setTabs] = useState(() => loadChatTabs(projects, currentPid))
   const [activeKey, setActiveKey] = useState(() => {
     const t = loadChatTabs(projects, currentPid)
@@ -2763,7 +2722,7 @@ function GwChatRail({ projects, currentPid, currentData, onClose, onTurnDone, fo
         } catch (_) { /* leave unresolved; the tab renders once data lands */ }
       })()
     })
-  }, [tabs, currentPid, currentData, projData])
+  }, [api, tabs, currentPid, currentData, projData])
 
   // Add a brand-new chat tab for a project (a 2nd+ tab on the same project).
   function newChatForProject(projectId) {
@@ -2837,22 +2796,13 @@ function GwChatRail({ projects, currentPid, currentData, onClose, onTurnDone, fo
   ] })
 }
 
-// Light text on the page body means the host uses a dark theme.
-function hostIsDark() {
-  try {
-    const m = getComputedStyle(document.body).color.match(/\d+(\.\d+)?/g)
-    if (!m) return true
-    const [r, g, b] = m.map(Number)
-    return (0.299 * r + 0.587 * g + 0.114 * b) > 140
-  } catch (_) { return true }
-}
-
 export default {
   id: ID,
   name: 'Ghostwriter',
   description: 'Ghostwriter: write screenplays with your model — formatted pages, revisions with undo, Fountain / Final Draft / PDF export.',
   defaultEnabled: true,
   register(ctx) {
+    const api = (path, options) => ctx.rest(path, options)
     const style = document.createElement('style')
     style.textContent = CSS
     document.head.append(style)
@@ -2866,16 +2816,12 @@ export default {
       id: `${ID}.route`,
       area: ROUTES_AREA,
       data: { path: '/ghostwriter' },
-      render: () => jsx(ScreenplayPane, {})
+      render: () => jsx(ScreenplayPane, { api })
     })
     ctx.register({
       id: `${ID}.nav`,
       area: SIDEBAR_NAV_AREA,
-      // The Ghostwriter mark as the sidebar icon; 'writing' is the fallback
-      // for hosts that only render codicons.
-      data: { path: '/ghostwriter', label: 'Ghostwriter', codicon: 'writing',
-        icon: jsx(Logo, { size: 16, tone: hostIsDark() ? 'white' : 'black' }),
-        iconUrl: hostIsDark() ? LOGO_IMG.dark64 : LOGO_IMG.light64 }
+      data: { path: '/ghostwriter', label: 'Ghostwriter', codicon: 'writing' }
     })
     ctx.register({
       id: `${ID}.palette`,
