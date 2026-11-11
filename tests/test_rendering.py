@@ -91,7 +91,7 @@ def test_standard_indents():
     assert abs(dlg_w - 252.0) < 0.01, dlg_w
     paren_x, _ = r.col("parenthetical")
     assert abs(paren_x - 223.2) < 0.01, paren_x
-    assert r.config_version == "screenplay-pdf/2"
+    assert r.config_version == "screenplay-pdf/3"
 
 
 def test_dialogue_indented_in_pdf():
@@ -102,8 +102,12 @@ def test_dialogue_indented_in_pdf():
     dialogue line actually lands."""
     from screenplay import rendering
     data, _ = _pdf_bytes()
-    # Pull every (x, text) pair from the first page's content stream.
-    stream = re.search(rb"stream\n(.*?)\nendstream", data, re.S).group(1)
+    # The sample has a title page, so the body (and its dialogue) starts on
+    # page 2. Find the content stream that actually contains the dialogue line
+    # rather than assuming it is the first stream.
+    streams = re.findall(rb"stream\n(.*?)\nendstream", data, re.S)
+    stream = next((st for st in streams if b"The night everything ended." in st),
+                  streams[-1])
     cs = stream.decode("latin-1")
     pairs = {t: float(x) for x, t in
              re.findall(r"1 0 0 1 ([\d.]+) [\d.]+ Tm\n\((.*)\) Tj", cs)}
@@ -156,3 +160,59 @@ def test_no_midword_break_in_layout():
     assert " ".join(action_lines) == para, action_lines
     max_chars = int(s.col("action")[1] // s.char_width)
     assert all(len(t) <= max_chars for t in action_lines), (max_chars, action_lines)
+
+
+def test_title_page_is_first_page():
+    """A Fountain title page renders as its OWN first page: the title in the
+    upper third (large bold), "Written by" + author in the middle, and the
+    contact block (address / email / phone) in the bottom-left at the left
+    margin. The script body starts on the next page."""
+    from screenplay import rendering
+    snap = ("Title: The Last Light\n"
+            "Author: Jane Doe\n"
+            "Address: 123 Main St\n"
+            "Email: jane@doe.com\n"
+            "Phone: +1 555 0100\n"
+            "\n"
+            "FADE IN:\n"
+            "\n"
+            "INT. OLD HOUSE - NIGHT\n"
+            "\n"
+            "Rain hammers the windows.\n")
+    B.fresh_home()
+    s = B.svc()
+    p = s.import_project("T", "A", snap)
+    exp = s.export_pdf(p.id)
+    data = Path(exp.artifact_path).read_bytes()
+    # Title page + at least one body page.
+    assert exp.page_count >= 2, exp.page_count
+    streams = re.findall(rb"stream\n(.*?)\nendstream", data, re.S)
+    title_cs = streams[0].decode("latin-1")
+    body_cs = streams[1].decode("latin-1")
+    # Title page carries the title (large bold font), the credit, and contact.
+    assert "The Last Light" in title_cs
+    assert "/F2 18 Tf" in title_cs, "title should use the large bold font"
+    assert "Written by" in title_cs
+    assert "Jane Doe" in title_cs
+    for needle in ("123 Main St", "jane@doe.com", "+1 555 0100"):
+        assert needle in title_cs, f"contact line missing from title page: {needle}"
+    # Contact lines sit at the LEFT margin (x=108), not centered.
+    pairs = {t: float(x) for x, t in
+             re.findall(r"1 0 0 1 ([\d.]+) [\d.]+ Tm\n\((.*)\) Tj", title_cs)}
+    assert abs(pairs.get("123 Main St", -1) - 108.0) < 0.01, pairs.get("123 Main St")
+    # The title sits in the upper third (y above the page midpoint, from bottom).
+    title_y = None
+    for m in re.finditer(r"1 0 0 1 [\d.]+ ([\d.]+) Tm\n\(The Last Light\) Tj", title_cs):
+        title_y = float(m.group(1))
+    assert title_y is not None and title_y > 792.0 / 2.0, title_y
+    # The body starts on page 2, not on the title page.
+    assert "INT. OLD HOUSE - NIGHT" in body_cs
+    assert "INT. OLD HOUSE - NIGHT" not in title_cs
+
+
+def test_split_title_no_title_page():
+    """A document with no leading metadata has no title page (body_start=0)."""
+    from screenplay import rendering
+    fields, order, body_start = rendering.split_title(
+        "FADE IN:\n\nINT. OLD HOUSE - NIGHT\n\nRain.\n")
+    assert fields == {} and order == [] and body_start == 0

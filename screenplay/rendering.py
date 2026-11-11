@@ -38,8 +38,9 @@ class RenderSettings:
     # Typography.
     font_size: float = 12.0
     leading: float = 12.0          # points per line
+    title_font_size: float = 18.0  # title-page title (larger than body)
     # config_version bumps whenever any of the above change meaningfully.
-    config_version: str = "screenplay-pdf/2"
+    config_version: str = "screenplay-pdf/3"
 
     @property
     def char_width(self) -> float:
@@ -181,6 +182,127 @@ def layout_lines(snapshot: str, s: RenderSettings) -> List[LayoutLine]:
     return out
 
 
+# --- Title page -----------------------------------------------------------
+# A Fountain title page is the block of "Key: Value" metadata lines at the very
+# top of the document (before the first scene heading). We render it as its OWN
+# first page, matching the industry-standard layout: the title in the upper
+# third, the credit/author in the middle, and the contact block (address /
+# email / phone) in the bottom-left corner. The body then starts on page 2.
+
+# Fields that render in the bottom-left contact block, in display order.
+_CONTACT_KEYS = ("Address", "Email", "Phone", "Contact")
+# All standard title-page keys (used to tell standard vs extra metadata apart).
+_STANDARD_KEYS = frozenset(
+    ["Title", "Author", "Source", "Draft date", "Address", "Email", "Phone", "Contact"]
+)
+# A metadata line: "Key: value" where the value is non-empty. This excludes
+# transitions like "FADE IN:" (no value after the colon), matching the JS parser.
+_META_RE = re.compile(r"^([A-Za-z][A-Za-z ]*?):\s*(\S.*)$")
+_META_LINE_RE = re.compile(r"^[A-Za-z][A-Za-z ]*?:\s*\S")
+
+
+def split_title(snapshot: str) -> Tuple[dict, List[str], int]:
+    """Split ``snapshot`` into ``(fields, order, body_start)``.
+
+    ``fields`` maps each metadata key to its (trimmed) value; ``order`` is the
+    original key order; ``body_start`` is the character offset of the first
+    non-metadata line (the script body, e.g. "FADE IN:"). Returns empty fields
+    and ``body_start == 0`` when the document has no title page. Mirrors the
+    frontend's ``parseTitlePage`` so the PDF and the in-app view agree.
+    """
+    lines = snapshot.split("\n")
+    # Find the end of the title region: blank lines and "Key: value" lines only.
+    k = 0
+    for i, ln in enumerate(lines):
+        if ln.strip() == "":
+            k = i + 1
+            continue
+        if _META_LINE_RE.match(ln):
+            k = i + 1
+            continue
+        break
+    fields: dict = {}
+    order: List[str] = []
+    body_start = 0
+    for i in range(k):
+        m = _META_RE.match(lines[i])
+        if m:
+            key = m.group(1).strip()
+            if key:
+                if key not in fields:
+                    order.append(key)
+                fields[key] = m.group(2).strip()
+        body_start += len(lines[i]) + 1  # +1 = newline
+    if not fields:
+        return {}, [], 0
+    return fields, order, body_start
+
+
+def _title_center_x(text: str, size: float, s: RenderSettings) -> float:
+    """Center ``text`` (Courier at ``size``) horizontally on the page."""
+    w = len(text) * 0.6 * size
+    return (s.page_width - w) / 2.0
+
+
+def title_page_content_stream(fields: dict, order: List[str], s: RenderSettings) -> bytes:
+    """Build the PDF content stream for the title page (its own first page).
+
+    Layout (fractions of page height, from the top):
+      title      36%  centered, large bold
+      Written by 42%  centered
+      author     46%  centered
+      source     52%  centered (if present)
+      draft date 56%  centered (if present)
+      contact   ~84%  bottom-left (address / email / phone / contact, + extras)
+    """
+    H = s.page_height
+    yf = lambda frac: H * (1.0 - frac)  # fraction-from-top -> y from bottom
+    parts: List[str] = ["BT"]
+
+    title = (fields.get("Title") or "").strip()
+    if title:
+        parts.append(f"/F2 {s.title_font_size:g} Tf")
+        parts.append(f"1 0 0 1 {_title_center_x(title, s.title_font_size, s):.2f} {yf(0.36):.2f} Tm")
+        parts.append(f"({_pdf_escape(title)}) Tj")
+
+    parts.append(f"/F1 {s.font_size:g} Tf")
+    author = (fields.get("Author") or "").strip()
+    if author:
+        parts.append(f"1 0 0 1 {_title_center_x('Written by', s.font_size, s):.2f} {yf(0.42):.2f} Tm")
+        parts.append("(Written by) Tj")
+        parts.append(f"1 0 0 1 {_title_center_x(author, s.font_size, s):.2f} {yf(0.46):.2f} Tm")
+        parts.append(f"({_pdf_escape(author)}) Tj")
+    source = (fields.get("Source") or "").strip()
+    if source:
+        parts.append(f"1 0 0 1 {_title_center_x(source, s.font_size, s):.2f} {yf(0.52):.2f} Tm")
+        parts.append(f"({_pdf_escape(source)}) Tj")
+    draft = (fields.get("Draft date") or "").strip()
+    if draft:
+        parts.append(f"1 0 0 1 {_title_center_x(draft, s.font_size, s):.2f} {yf(0.56):.2f} Tm")
+        parts.append(f"({_pdf_escape(draft)}) Tj")
+
+    # Contact block, bottom-left corner (left margin), one line per field.
+    contact: List[str] = []
+    for key in _CONTACT_KEYS:
+        v = (fields.get(key) or "").strip()
+        if v:
+            contact.append(v)
+    for key in order:  # any extra, non-standard metadata -> "Key: value"
+        if key in _STANDARD_KEYS:
+            continue
+        v = (fields.get(key) or "").strip()
+        if v:
+            contact.append(f"{key}: {v}")
+    if contact:
+        y = yf(0.84)
+        for line in contact:
+            parts.append(f"1 0 0 1 {s.text_left:.2f} {y:.2f} Tm")
+            parts.append(f"({_pdf_escape(line)}) Tj")
+            y -= s.leading
+    parts.append("ET")
+    return ("\n".join(parts)).encode("latin-1", "replace")
+
+
 def paginate(lines: List[LayoutLine], s: RenderSettings) -> List[List[LayoutLine]]:
     cap = s.lines_per_page
     pages: List[List[LayoutLine]] = []
@@ -196,8 +318,30 @@ def paginate(lines: List[LayoutLine], s: RenderSettings) -> List[List[LayoutLine
 
 
 def render_pages(snapshot: str, s: RenderSettings) -> List[List[str]]:
-    """Text of every page, for inspection (M4)."""
-    return [[ln[0] for ln in page] for page in paginate(layout_lines(snapshot, s), s)]
+    """Text of every page, for inspection (M4). The title page (if present) is
+    listed first in reading order, then the body pages."""
+    fields, order, body_start = split_title(snapshot)
+    body = snapshot[body_start:] if fields else snapshot
+    pages: List[List[str]] = []
+    if fields:
+        tp: List[str] = []
+        if fields.get("Title"):
+            tp.append(fields["Title"])
+        if fields.get("Author"):
+            tp += ["Written by", fields["Author"]]
+        for key in ("Source", "Draft date"):
+            if fields.get(key):
+                tp.append(fields[key])
+        for key in _CONTACT_KEYS:
+            if fields.get(key):
+                tp.append(fields[key])
+        for key in order:
+            if key not in _STANDARD_KEYS and fields.get(key):
+                tp.append(f"{key}: {fields[key]}")
+        pages.append(tp)
+    if body.strip() or not fields:
+        pages.extend([[ln[0] for ln in page] for page in paginate(layout_lines(body, s), s)])
+    return pages or [[]]
 
 
 # --- PDF byte assembly ----------------------------------------------------
@@ -207,15 +351,24 @@ def _pdf_escape(text: str) -> str:
 
 
 def render_pdf(snapshot: str, s: RenderSettings) -> Tuple[bytes, int]:
-    """Render the snapshot to PDF bytes. Returns ``(pdf_bytes, page_count)``."""
+    """Render the snapshot to PDF bytes. Returns ``(pdf_bytes, page_count)``.
+
+    A leading title page (the Fountain metadata block) is rendered as its own
+    FIRST page in the standard layout (title upper-third, author middle,
+    contact bottom-left); the script body starts on the next page."""
+    fields, order, body_start = split_title(snapshot)
+    body = snapshot[body_start:] if fields else snapshot
     try:
-        pages = paginate(layout_lines(snapshot, s), s)
+        body_pages = paginate(layout_lines(body, s), s) if body.strip() else []
     except Exception as exc:  # pragma: no cover - defensive
         raise RendererError(f"layout failed: {exc}") from exc
 
-    # Build per-page content streams.
+    # Build per-page content streams: the title page first (if present), then the
+    # body pages. Each body page is a flow of lines from the top margin down.
     content_streams: List[bytes] = []
-    for page in pages:
+    if fields:
+        content_streams.append(title_page_content_stream(fields, order, s))
+    for page in body_pages:
         parts: List[str] = ["BT"]
         # Font selection is REQUIRED before any Tj — without a `/F1 <size> Tf`
         # in the text object, viewers have no current font and draw a blank page
@@ -238,7 +391,7 @@ def render_pdf(snapshot: str, s: RenderSettings) -> Tuple[bytes, int]:
     # Object numbering:
     #   1 Catalog, 2 Pages, 3 Info, 4 F1 Courier, 5 F2 Courier-Bold,
     #   then for page i (0-based): page obj = 6 + 2i, content = 7 + 2i.
-    n = len(pages)
+    n = len(content_streams)
     page_obj_nums = [6 + 2 * i for i in range(n)]
     content_obj_nums = [7 + 2 * i for i in range(n)]
 
