@@ -1,3 +1,5 @@
+<img width="2752" height="1536" alt="ghost-hands-on-keyboard" src="https://github.com/user-attachments/assets/4608819e-9556-4401-a35d-8fa065ab36cf" />
+
 # Ghostwriter
 
 A Hermes plugin for writing screenplays by talking to your model. Describe a
