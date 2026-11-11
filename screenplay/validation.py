@@ -97,8 +97,8 @@ def _check_page_limit(candidate_snapshot: str, rules: M.RulesVersion,
     if rules.page_limit is None:
         return M.Check("PAGE_LIMIT", M.PASS, "no limit")
     try:
-        _bytes, pages = rendering.render_pdf(candidate_snapshot, settings)
-    except rendering.RendererError as exc:
+        pages = rendering.count_pages(candidate_snapshot, settings)
+    except Exception as exc:  # noqa: BLE001 - never let a layout bug pass a gate
         return M.Check("PAGE_LIMIT", M.UNAVAILABLE, f"renderer unavailable: {exc}")
     if pages > rules.page_limit:
         return M.Check("PAGE_LIMIT", M.FAIL,

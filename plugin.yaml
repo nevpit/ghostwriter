@@ -1,19 +1,22 @@
 name: ghostwriter
 version: 0.1.0
-description: "Local screenplay workspace: Fountain parsing, immutable revisions, proposal workflow with deterministic validation, and stdlib PDF export. Agent tools plus a desktop pane; no third-party runtime dependencies."
+description: "Write screenplays by chatting with your model: industry-standard formatting, scene-level revisions with undo, Fountain / Final Draft / PDF import and export. Agent tools plus a desktop workspace; no third-party runtime dependencies."
 author: "Hermes"
 provides_tools:
   - ghost_status
   - ghost_list_projects
+  - ghost_create_project
   - ghost_get_project
-  - ghost_history
+  - ghost_read_script
   - ghost_read_scene
-  - ghost_import
   - ghost_propose
   - ghost_check_proposal
   - ghost_accept_proposal
   - ghost_reject_proposal
-  - ghost_export_pdf
+  - ghost_set_title_page
+  - ghost_update_rules
+  - ghost_find_replace
+  - ghost_history
   - ghost_restore
   - ghost_undo
-  - ghost_find_replace
+  - ghost_export

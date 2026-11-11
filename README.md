@@ -1,205 +1,117 @@
-# ghostwriter
+# Ghostwriter
 
-A local screenplay workspace for Hermes Agent: Fountain parsing, immutable
-revisions, a proposal workflow with deterministic validation, and stdlib PDF
-export. Ships as **14 agent tools** plus a **desktop pane**. No third-party
-runtime dependencies (Python stdlib + SQLite only).
+A Hermes plugin for writing screenplays by talking to your model. Describe a
+scene in plain language; the model writes it in proper screenplay format and
+saves it to your project, and you read it — laid out like a real script page —
+in the Ghostwriter workspace next to the chat.
 
-Tested against **Hermes v0.22.7** (git install `b200f5bc60e3`).
+Pure Python standard library + SQLite on the backend, a single-file desktop
+pane, no third-party runtime dependencies. Tested against **Hermes v0.22.7**.
 
-## What it does
+## Features
 
-- **Import** a Fountain script into a project with an immutable `v1` revision
-  (the exact source is the snapshot of record).
-- **Parse** each revision into typed scenes — `scene_heading`, `action`,
-  `character` (with `speaker` + optional `V.O.`/`O.S.` extension), `dialogue`,
-  `parenthetical`, `transition` — with **byte-accurate character offsets** so a
-  scene can be spliced without touching any other byte.
-- **Propose** edits as operations (`insert` / `replace`), **check** them with a
-  deterministic validator, then **accept** (creates a new immutable revision) or
-  **reject** (no revision is created).
-- **Stable scene ids** across a scene replacement (diff/anchor-friendly).
-- **Export** the active (or any) revision to a Courier PDF (base-14, pure
-  stdlib, zero deps).
+- **Industry-standard formatting.** Scripts are stored as
+  [Fountain](https://fountain.io). The parser follows the spec (scene headings
+  incl. forced and numbered, character cues with extensions and dual dialogue,
+  parentheticals, transitions, centered text, lyrics, notes, boneyard,
+  sections, synopses, page breaks, multi-line title page).
+- **PDF export with a real screenplay layout**: Courier 12, 1.5"/1" margins,
+  standard column positions, page numbers, `(MORE)` / `(CONT'D)` across page
+  breaks, no orphaned scene headings, standard title page, bold/italic/underline.
+- **Import** Fountain, plain text, Final Draft `.fdx`, and PDF (best effort,
+  using text positions to recover the columns). **Export** PDF, Fountain and
+  Final Draft `.fdx`.
+- **Safe revisions.** Every change is an immutable revision; undo and restore
+  never delete anything. Model edits go through *proposals* that are checked
+  (Fountain parse, protected passages, allowed speakers, page/speech limits)
+  and can be reviewed before they are accepted — or applied immediately and
+  undone later. Concurrent edits from the chat and the editor never silently
+  overwrite each other.
+- **Desktop workspace**: formatted reading view with a scene outline, in-place
+  editor and raw Fountain editor, structure-aware find & replace, title page
+  editor, proposals review with before/after, rules, history, export, and a
+  project-scoped multi-tab chat that refreshes the script as the model works.
 
-## Repository layout
+## Layout
 
 ```
-ghostwriter/
-  plugin.yaml              # manifest: name, version, provides_tools
-  __init__.py              # agent entry point: register(ctx) -> 14 tools
-  screenplay/              # the service package (pure stdlib)
-    models.py              # dataclasses + ServiceError + HERMES_VERSION
-    fountain.py            # offset-accurate Fountain parser + op application
-    repository.py          # SQLite (WAL) persistence + migrations
-    service.py             # project/revision/proposal lifecycle (orchestrator)
-    engine.py              # DocumentEngine ABC + EngineRegistry (format dispatch)
-    formats/               # one module per supported format
-      __init__.py          # build_default_registry() -> EngineRegistry
-      screenplay.py        # ScreenplayEngine: Fountain parse/validate/render/import
-    rendering.py           # pure-stdlib Courier PDF writer (screenplay)
-    validation.py          # deterministic proposal validator
-    runtime.py             # process-wide get_service() singleton + reset_service()
-    tools.py               # agent tool handlers + JSON schemas
-    migrations/0001_initial.sql
-    migrations/0002_recoverable_revisions.sql   # relax UNIQUE content-hash index (recovery)
-    migrations/0003_format.sql                  # add projects.format column (multi-format)
-  dashboard/
-    manifest.json          # {"name","api"} -> web-server router mount
-    plugin_api.py          # FastAPI APIRouter (exec'd by the web server)
-  desktop/
-    plugin.js              # Desktop SDK pane (react/jsx-runtime, no JSX transform)
-  skills/                  # bundled per-format skills (auto-registered in __init__.py)
-    screenplay/            # served read-only as ghostwriter:screenplay
-      SKILL.md
-      references/          # authoring-and-import.md, plugin-code-changes.md
-  tests/
-    fixtures/sample.fountain
-    test_*.py              # parser / service / rendering / tools / api
-    run_all.py             # no-pytest runner
+plugin.yaml              manifest (name, version, provides_tools)
+__init__.py              register(ctx): agent tools + bundled skills
+screenplay/              backend package (stdlib only)
+  fountain.py            Fountain parser, title page, scene splicing
+  rendering.py           PDF layout + writer (base-14 Courier, WinAnsi)
+  importers.py           Fountain/text/FDX/PDF import, FDX export
+  validation.py          deterministic proposal checks
+  service.py             projects, revisions, proposals, rules, export
+  repository.py          SQLite (WAL) persistence + migrations
+  engine.py, formats/    document-engine abstraction (screenplay = engine #1)
+  tools.py               agent tool handlers + JSON schemas
+  runtime.py             process-wide service, data-dir resolution
+dashboard/plugin_api.py  FastAPI router for the desktop pane
+desktop/plugin.js        desktop pane (React via the Hermes plugin SDK)
+skills/screenplay/       bundled skill, served as ghostwriter:screenplay
+tests/                   stdlib test suite (pytest-compatible)
 ```
-
-## Document engines
-
-The service core is **format-agnostic**: it stores a snapshot (the source of
-record), splices it by byte offset, and manages revisions / proposals / rules /
-findings. Everything format-specific — parsing into blocks, applying edits,
-validating, rendering to PDF, and importing alternate files — is delegated to a
-`DocumentEngine` (see `screenplay/engine.py`), resolved per project by
-`Project.format`. The MVP registers a single engine:
-
-- **`screenplay`** — Fountain, delegating to the existing
-  `fountain` / `validation` / `rendering` / `importers` modules.
-
-The engine registry is intentionally kept so a new format (a book/novel
-engine, a poem engine, …) is a matter of adding one module under
-`screenplay/formats/` and registering it in `build_default_registry()` — the
-service core, agent tool surface, and plugin name never change. `import_file`
-maps a file extension to a format in `service._detect_format` (today every
-import is a screenplay), and export is format-aware via the engine.
-
-The desktop pane is format-aware too: it dispatches on `Project.format` to a
-per-format **view pack** (`VIEW_PACKS` in `desktop/plugin.js`) that supplies how
-that format's blocks render in the reading view and how they're labelled in the
-navigator. The screenplay pack reproduces the Fountain reading view exactly, and
-a header badge shows the active format. Unknown formats fall back to the
-screenplay pack.
-
-## Naming & organization standard
-
-Ghostwriter is growing from a screenplay tool into a multi-format authoring app
-(screenplays now; novels, essays, TV scripts, and more later). Every format
-follows the same shape:
-
-| Layer | Convention | Screenplay (now) | Later |
-|---|---|---|---|
-| Plugin | fixed app identity | `ghostwriter` | — |
-| **Skill** | `ghostwriter:<doctype>` — bare format name, no verb/suffix | `ghostwriter:screenplay` | `ghostwriter:novel`, `ghostwriter:essay` |
-| Skill dir | `skills/<doctype>/SKILL.md` (+ `references/`) | `skills/screenplay/` | `skills/novel/`, … |
-| Engine | one `DocumentEngine` per format | `formats/screenplay.py` | `formats/novel.py`, … |
-| Shared tools | format-agnostic project/revision/scene ops | `ghost_*` | new core tools: `ghostwriter_*` |
-
-Rules:
-- **One skill per format**, named by the bare format name. The `ghostwriter:` namespace
-  carries the app identity, so the bare name is just the format: `screenplay`, not
-  `screenplay-edits`. Skills are **bundled in the plugin** (`skills/<doctype>/`) and
-  auto-registered in `__init__.py`; they are served read-only as `ghostwriter:<doctype>`
-  (not copied into `~/.hermes/skills/`), so they update with the plugin. A user who wants
-  a customized copy writes their own skill under a separate name; it is never overwritten
-  by a plugin update.
-- **One engine per format** under `screenplay/formats/`; the service core stays format-agnostic.
-- **Shared tools stay format-agnostic** (`ghost_*` operate on the generic project/revision/scene
-  model); a capability that is genuinely format-specific gets a format-qualified name.
-- Add a format by adding `skills/<doctype>/` + `formats/<doctype>.py` and a `register_skill`/
-  engine entry; no renames of existing formats.
-
-## Install
-
-The plugin is a **user plugin** — drop it in the user plugin dir and enable it.
-`hermes plugins install` only pulls from the catalog / Git / owner-repo, so a
-local folder is installed by copy + enable:
-
-```bash
-# 1) copy into the user plugin dir (strip build artifacts)
-cp -r ghostwriter ~/.hermes/plugins/
-find ~/.hermes/plugins/ghostwriter -name __pycache__ -type d -exec rm -rf {} +
-
-# 2) enable it (adds it to plugins.enabled in config.yaml)
-hermes plugins enable ghostwriter
-
-# 3) verify the real runtime loads it (14 tools registered)
-hermes plugins doctor ghostwriter
-```
-
-- Agent tools become available on the **next agent session** (the gateway
-  defers tool registration across a live reload).
-- The **desktop pane** materializes when the desktop app refreshes its plugin
-  list (app restart, or opening the pane area); it is copied into
-  `~/.hermes/desktop-plugins/ghostwriter/` with a `.hermes-package.json`
-  marker.
-- Data lives under `~/.hermes/plugin-data/ghostwriter/` (profile-scoped,
-  survives updates).
-
-To uninstall: `hermes plugins disable ghostwriter` (or `remove`) and delete
-`~/.hermes/plugins/ghostwriter/`.
-
-## Tests
-
-No `pytest` required — the suite runs on plain Python (each test is also
-pytest-compatible):
-
-```bash
-python ghostwriter/tests/run_all.py
-```
-
-Covers: Fountain parsing (offsets, element typing, extensions), service
-lifecycle (import → propose → check → accept/reject, revision immutability,
-stable scene ids, error paths), PDF structural validity (header/xref/page count/
-Courier/text ops), the 11 agent tool handlers end-to-end, and the dashboard
-FastAPI router via `TestClient`.
 
 ## Agent tools
 
-All in toolset `screenplay`, returning JSON `{"success": ...}`:
-
 | Tool | Purpose |
 |------|---------|
-| `ghost_status` | plugin + version + project count |
-| `ghost_import` | import Fountain text as a new project (v1) |
-| `ghost_list_projects` | list projects |
-| `ghost_get_project` | project + active revision + scene index |
-| `ghost_history` | immutable revision history (dicts) |
-| `ghost_read_scene` | one scene's typed elements |
-| `ghost_propose` | propose insert/replace operations |
-| `ghost_check_proposal` | run deterministic validation |
-| `ghost_accept_proposal` | accept → new immutable revision |
-| `ghost_reject_proposal` | reject (reason recorded, no revision) |
-| `ghost_export_pdf` | export active/any revision to PDF |
-| `ghost_restore` | restore an earlier snapshot as a new revision |
-| `ghost_undo` | restore the previous revision (undo the latest change) |
-| `ghost_find_replace` | structure-aware find/replace (format-safe, preserves case + ALL-CAPS cues) |
+| `ghost_create_project` | new project (optional Fountain text; title page from title/author) |
+| `ghost_list_projects` / `ghost_get_project` | projects; compact outline (scenes, characters, words, pages, rules) |
+| `ghost_read_script` / `ghost_read_scene` | Fountain text of the script or selected scenes; one scene's elements |
+| `ghost_propose` | insert / replace / delete scenes, checked; `apply: true` accepts at once |
+| `ghost_check_proposal` / `ghost_accept_proposal` / `ghost_reject_proposal` | proposal lifecycle |
+| `ghost_find_replace` | structure-aware rename across the script |
+| `ghost_set_title_page` | replace the title page |
+| `ghost_update_rules` | page limit, speech limit, allowed speakers, guidance |
+| `ghost_history` / `ghost_restore` / `ghost_undo` | recovery |
+| `ghost_export` | PDF, Fountain or Final Draft file |
+| `ghost_status` | plugin status |
 
-## Implementation notes
+The bundled skill (`skills/screenplay/`) teaches the model the workflow and the
+Fountain conventions; `tests/test_skill_tools.py` keeps it in sync with
+`provides_tools`.
 
-- **Desktop→backend calls use `window.hermesDesktop.api(request)`, not `ctx.rest`.**
-  `ctx.rest` does not exist in v0.22.7. The Desktop SDK's native bridge
-  auto-injects the `x-hermes-gateway-ticket` and returns the **unwrapped** JSON
-  body, which is what the pane's data layer expects.
-- **The dashboard router returns bare objects/arrays** (no `{"success"}`
-  envelope); errors are `HTTPException` with a structured `detail`. This matches
-  the unwrapped-body contract of `window.hermesDesktop.api`.
+## Install
+
+Copy the folder into the user plugin directory and enable it:
+
+```bash
+cp -r ghostwriter ~/.hermes/plugins/
+hermes plugins enable ghostwriter
+hermes plugins doctor ghostwriter
+```
+
+Agent tools appear in the next agent session; the desktop pane appears when the
+desktop app refreshes its plugin list. Data lives in
+`~/.hermes/plugin-data/ghostwriter/` (per profile; survives updates). A data
+directory from the plugin's previous name (`hermes-screenplay`) is adopted
+automatically.
+
+## Development
+
+```bash
+python tests/run_all.py          # no pytest needed; FastAPI is needed for test_api
+node --check desktop/plugin.js   # (as an ES module: node --input-type=module --check < desktop/plugin.js)
+```
+
+Implementation notes:
+
+- The desktop pane calls the backend through `window.hermesDesktop.api(...)`,
+  which adds the gateway ticket and returns the unwrapped JSON body; the router
+  therefore returns bare objects and raises `HTTPException` with
+  `{"code", "message", "details"}` (`409` for stale writes).
+- The agent process and the web-server process each open the same SQLite file;
+  every revision commit is a compare-and-swap on the project's active revision.
+- Scene ids are stable across edits, so a proposal made on an older revision is
+  replayed onto the current one unless a scene it touches was edited meanwhile.
 
 ## Known limitations
 
-- `(beat)`-style parentheticals immediately after dialogue are currently typed
-  as `action`; the text is preserved either way (a parser-fidelity nit).
-- PDF layout is a single-column Courier rendering (correct content + page
-  count); it is not a full industry-standard screenplay page template.
-- A fully-authenticated **live** HTTP route probe and the in-GUI pane render
-  require a running desktop session (gateway ticket / app refresh) — verified
-  here via the real-loader `doctor` (14 tools), the `TestClient` router tests,
-  and the live gateway mounting the route (HTTP 401 auth gate, not 404).
-- The **agent-in-the-loop** turn (the configured model itself calling
-  `ghost_propose` with generated text) is not exercised headlessly; the 14
-  tools are registered and the full service workflow they drive is demonstrated
-  end-to-end.
+- PDF import needs a text layer and standard font encodings (scans and some
+  CID-font PDFs can't be read).
+- Dual dialogue prints side by side in the PDF but is shown stacked in the
+  workspace.
+- Action paragraphs keep the line breaks you type (per the Fountain spec), so
+  hard-wrapped text prints hard-wrapped.

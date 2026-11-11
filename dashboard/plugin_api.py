@@ -4,25 +4,21 @@ This module is **exec'd** (not imported) in the Hermes web-server process. It
 must expose a module-level ``router`` (a FastAPI ``APIRouter``); the web server
 mounts it at ``/api/plugins/ghostwriter/<route>``.
 
-The desktop pane (``desktop/plugin.js``) reaches these routes through the
-authenticated desktop API bridge (``window.hermesDesktop.api``), which injects
-the gateway ticket automatically and returns the unwrapped JSON body. Handlers
-therefore return the data object/array directly; errors raise ``HTTPException``
-with a structured ``detail`` (mirroring the agent tools' ``code`` vocabulary).
-
-The same process-wide service instance used by the agent tools is reused here,
-so tools and the workspace always see identical state.
+The desktop pane reaches these routes through ``window.hermesDesktop.api``,
+which injects the gateway ticket and returns the unwrapped JSON body, so
+handlers return bare objects/arrays; errors raise ``HTTPException`` with a
+structured ``detail`` (``{"code", "message", "details"}``).
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
-# plugin_api.py lives in dashboard/; the screenplay service package is the
-# plugin root one level up. The loader already puts the plugin dir on
-# sys.path, but adding it here keeps the module robust to how it is exec'd.
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 if str(_PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_ROOT))
@@ -30,35 +26,48 @@ if str(_PLUGIN_ROOT) not in sys.path:
 from fastapi import APIRouter, HTTPException, Request, Response  # noqa: E402
 
 from screenplay import models as M  # noqa: E402
+from screenplay import rendering  # noqa: E402
 from screenplay.runtime import get_service  # noqa: E402
 
 router = APIRouter()
+
+_STATUS = {M.ERR_PROJECT_NOT_FOUND: 404, M.ERR_REVISION_NOT_FOUND: 404,
+           M.ERR_SCENE_NOT_FOUND: 404, M.ERR_STALE_REVISION: 409, M.ERR_CONFLICT: 409}
 
 
 def _dc(obj: Any) -> Any:
     return asdict(obj) if hasattr(obj, "__dataclass_fields__") else obj
 
 
-def _http(e: M.ServiceError) -> HTTPException:
-    status = 404 if "NOT_FOUND" in (e.code or "").upper() else 400
-    return HTTPException(status_code=status,
-                         detail={"code": e.code, "message": e.message, "details": e.details})
-
-
 def _guard(fn, *a, **k):
     try:
         return fn(*a, **k)
     except M.ServiceError as e:
-        raise _http(e) from e
+        raise HTTPException(status_code=_STATUS.get(e.code, 400),
+                            detail={"code": e.code, "message": e.message, "details": e.details}) from e
+
+
+async def _body(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _bad(message: str, code: str = "INVALID_BODY"):
+    raise HTTPException(status_code=400, detail={"code": code, "message": message, "details": None})
+
+
+def _rev_out(rev: M.Revision) -> dict:
+    return {"id": rev.id, "project_id": rev.project_id, "parent_id": rev.parent_id,
+            "origin": rev.origin, "created_at": rev.created_at, "scene_count": len(rev.scenes)}
 
 
 @router.get("/status")
 def status():
     projects = get_service().list_projects()
-    return {"plugin": "ghostwriter",
-            "hermes_version": M.HERMES_VERSION,
-            "projects": len(projects),
-            "project_ids": [p.id for p in projects]}
+    return {"plugin": "ghostwriter", "hermes_version": M.HERMES_VERSION, "projects": len(projects)}
 
 
 @router.get("/projects")
@@ -66,214 +75,205 @@ def list_projects():
     return [_dc(p) for p in _guard(get_service().list_projects)]
 
 
+@router.post("/projects")
+async def create_project(request: Request):
+    """Create a project. Body: ``{title, author?, fountain_text?}`` or an
+    uploaded file ``{filename, content_b64, title?, author?}``."""
+    body = await _body(request)
+    svc = get_service()
+    if body.get("content_b64"):
+        try:
+            content = base64.b64decode(body["content_b64"], validate=True)
+        except (binascii.Error, ValueError) as exc:
+            _bad(f"content_b64 is not valid base64: {exc}", "IMPORT_BAD_BODY")
+        p = _guard(svc.import_file, body.get("filename", ""), content,
+                   body.get("title", ""), body.get("author", ""), format=body.get("format"))
+    else:
+        p = _guard(svc.create_project, body.get("title", ""), body.get("author", ""),
+                   body.get("fountain_text", ""), body.get("format"))
+    return _dc(p)
+
+
 @router.get("/projects/{project_id}")
 def get_project(project_id: str):
     svc = get_service()
     p = _guard(svc.get_project, project_id)
     rev = _guard(svc.read_revision, project_id, p.active_revision_id)
-    hist = _guard(svc.history, project_id)
-    rules = None
-    if p.active_rules_id:
-        r = svc.repo.get_rules(p.active_rules_id)
-        if r is not None:
-            rules = {"id": r.id, **r.to_dict()}
-    # ``Scene.text`` is a method (sliced from the snapshot), so ``asdict``
-    # drops it; compute the raw text explicitly for clients (the Desktop
-    # editor seeds from it).
-    rev_dict = _dc(rev)
-    rev_dict["scenes"] = [
-        {**s, "text": sc.text(rev.snapshot)}
-        for s, sc in zip(rev_dict["scenes"], rev.scenes)
-    ]
-    return {"project": _dc(p), "active_revision": rev_dict,
-            "active_revision_id": p.active_revision_id, "revision_count": len(hist),
-            "rules": rules}
+    doc = _guard(svc.document, project_id, rev.id)
+    rules = svc.repo.get_rules(p.active_rules_id)
+    return {
+        "project": _dc(p),
+        "active_revision_id": rev.id,
+        "active_revision": {
+            **_rev_out(rev), "snapshot": rev.snapshot,
+            "scenes": [{**_dc(sc), "text": sc.text(rev.snapshot)} for sc in rev.scenes],
+        },
+        "title_page": doc["title_page"],
+        "preamble": doc["preamble"],
+        "problems": doc["problems"],
+        "page_count": rendering.count_pages(rev.snapshot, svc.settings),
+        "revision_count": len(svc.repo.revision_headers(project_id)),
+        "rules": {"id": rules.id, **rules.to_dict()} if rules else None,
+    }
+
+
+@router.delete("/projects/{project_id}")
+def delete_project(project_id: str):
+    _guard(get_service().delete_project, project_id)
+    return {"deleted": project_id}
 
 
 @router.get("/projects/{project_id}/history")
 def history(project_id: str):
-    # service.history() returns dicts, not dataclasses.
-    revs = _guard(get_service().history, project_id)
-    return [{"id": r["id"], "parent_id": r["parent_id"], "origin": r["origin"],
-             "content_hash": r["content_hash"], "created_at": r["created_at"],
-             "scene_count": r["scene_count"], "is_active": r["is_active"]} for r in revs]
+    return list(reversed(_guard(get_service().history, project_id)))
 
 
 @router.get("/projects/{project_id}/proposals")
 def list_proposals(project_id: str):
-    return [_dc(p) for p in _guard(get_service().list_proposals, project_id)]
+    # Summaries only: the full candidate text is fetched per proposal.
+    out = []
+    for prop in _guard(get_service().list_proposals, project_id):
+        d = prop.to_dict()
+        d.pop("candidate_snapshot", None)
+        out.append(d)
+    return out
 
 
 @router.get("/proposals/{proposal_id}")
 def proposal_view(proposal_id: str):
-    """Proposal detail with backend-generated before/after scene text."""
-    return _guard(get_service().proposal_view, proposal_id)
-
-
-@router.post("/projects/{project_id}/scenes/{scene_id}")
-async def save_scene(project_id: str, scene_id: str, request: Request):
-    """Manual scene save: stores a new (active) revision.
-
-    Body: ``{"content": str, "heading"?: str, "revision_id"?: str}``. The
-    ``revision_id`` is the expected revision for optimistic concurrency;
-    a mismatch raises STALE_REVISION and the scene text is left untouched.
-    """
-    body = await request.json()
-    svc = get_service()
-    expected = body.get("revision_id")
-    cur = _guard(svc.read_scene, project_id, expected, scene_id)
-    heading = body.get("heading") or cur["heading"]
-    rev = _guard(svc.save_scene, project_id, scene_id, heading,
-                 body.get("content", ""), expected)
-    return _dc(rev)
-
-
-@router.post("/projects/{project_id}/snapshot")
-async def save_snapshot_endpoint(project_id: str, request: Request):
-    """Replace a revision's full snapshot (the raw Fountain source). Used by the
-    desktop find & replace, which edits the raw source directly. ``revision_id``
-    pins the expected active revision (optimistic concurrency — a stale base is
-    rejected with STALE_REVISION)."""
-    body = await request.json()
-    rev = _guard(get_service().save_snapshot, project_id, body["content"], body.get("revision_id"))
-    return _dc(rev)
-
-
-@router.post("/projects/{project_id}/replace")
-async def replace_endpoint(project_id: str, request: Request):
-    """Structure-aware find & replace. Replaces occurrences of ``query``
-    (case-insensitive) with ``replacement`` at the element level so Fountain
-    formatting -- all-caps character cues, scene headings, etc. -- is never
-    broken. ``target`` is either ``"all"`` or a 0-based global match index
-    (the client's highlighted hit, which matches the document order used
-    here). A matching character-cue name is uppercased so the cue survives
-    re-parse. Returns the new revision id and the number replaced."""
-    body = await request.json()
-    out = _guard(get_service().find_replace, project_id,
-                 body.get("query", ""), body.get("replacement", ""),
-                 body.get("target"), body.get("revision_id"))
-    return _dc(out)
-
-
-@router.put("/projects/{project_id}/rules")
-async def update_rules(project_id: str, request: Request):
-    """Create a new (active) rules version.
-
-    Body: any subset of ``dialogue_block_limit``, ``page_limit``,
-    ``allowed_speakers``, ``protected``, ``guidance``.
-    """
-    body = await request.json()
-    allowed = {"dialogue_block_limit", "page_limit", "allowed_speakers",
-               "protected", "guidance", "limits"}
-    changes = {k: v for k, v in body.items() if k in allowed and v is not None}
-    if not changes:
-        raise HTTPException(status_code=400, detail={
-            "code": "INVALID_BODY", "message": "no rule fields supplied",
-            "details": None})
-    rv = _guard(get_service().update_rules, project_id, **changes)
-    return {"id": rv.id, **rv.to_dict()}
-
-
-@router.post("/projects")
-async def import_project(request: Request):
-    body = await request.json()
-    if body.get("content_b64"):
-        # Multi-format import: the client uploads raw file bytes (base64) + the
-        # original filename; the service detects the format (Fountain/text/FDX/PDF)
-        # and converts it to Fountain.
-        import base64
-        try:
-            content = base64.b64decode(body["content_b64"])
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail={
-                "code": "IMPORT_BAD_BODY", "message": "content_b64 is not valid base64",
-                "details": {"error": str(exc)}})
-        p = _guard(get_service().import_file,
-                   body.get("filename", ""), content,
-                   body.get("title", ""), body.get("author", ""),
-                   format=body.get("format"))
-    else:
-        p = _guard(get_service().import_project,
-                   body.get("title", ""), body.get("author", ""),
-                   body.get("fountain_text", ""), body.get("format"))
-    return _dc(p)
-
-
-@router.post("/projects/{project_id}/propose")
-async def propose(project_id: str, request: Request):
-    body = await request.json()
-    # propose() takes raw operation dicts (it builds Operation objects internally).
-    # base_revision_id is optional: when given, the proposal is based on that
-    # (possibly stale) revision; when omitted it defaults to the active one.
-    prop = _guard(
-        get_service().propose, project_id,
-        body.get("operations", []),
-        base_revision_id=body.get("base_revision_id"),
-        rules_id=body.get("rules_id"),
-        idempotency_key=body.get("idempotency_key"),
-    )
-    return _dc(prop)
+    view = _guard(get_service().proposal_view, proposal_id)
+    view.pop("candidate_snapshot", None)
+    return view
 
 
 @router.post("/proposals/{proposal_id}/check")
 def check(proposal_id: str):
-    return _dc(_guard(get_service().check_proposal, proposal_id))
+    d = _dc(_guard(get_service().check_proposal, proposal_id))
+    d.pop("candidate_snapshot", None)
+    return d
 
 
 @router.post("/proposals/{proposal_id}/accept")
 def accept(proposal_id: str):
-    return _dc(_guard(get_service().accept_proposal, proposal_id))
+    return _rev_out(_guard(get_service().accept_proposal, proposal_id))
 
 
 @router.post("/proposals/{proposal_id}/reject")
 async def reject(proposal_id: str, request: Request):
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    return _dc(_guard(get_service().reject_proposal, proposal_id,
-                      reason=body.get("reason", "")))
+    body = await _body(request)
+    prop = _guard(get_service().reject_proposal, proposal_id, reason=body.get("reason", ""))
+    return {"id": prop.id, "status": prop.status}
+
+
+@router.post("/projects/{project_id}/propose")
+async def propose(project_id: str, request: Request):
+    body = await _body(request)
+    prop = _guard(get_service().propose, project_id, body.get("operations", []),
+                  base_revision_id=body.get("base_revision_id"), rules_id=body.get("rules_id"),
+                  idempotency_key=body.get("idempotency_key"))
+    d = _dc(prop)
+    d.pop("candidate_snapshot", None)
+    return d
+
+
+@router.post("/projects/{project_id}/scenes/{scene_id}")
+async def save_scene(project_id: str, scene_id: str, request: Request):
+    """Body: ``{"content": str, "heading"?: str, "revision_id"?: str}``."""
+    body = await _body(request)
+    svc = get_service()
+    expected = body.get("revision_id")
+    heading = body.get("heading")
+    if heading is None:
+        heading = _guard(svc.read_scene, project_id, expected, scene_id)["heading"]
+    return _rev_out(_guard(svc.save_scene, project_id, scene_id, heading,
+                           body.get("content", ""), expected))
+
+
+@router.post("/projects/{project_id}/snapshot")
+async def save_snapshot(project_id: str, request: Request):
+    """Save the full Fountain text. ``revision_id`` is the expected active
+    revision (a stale base returns 409 STALE_REVISION)."""
+    body = await _body(request)
+    if not isinstance(body.get("content"), str):
+        _bad("content (the full Fountain text) is required")
+    return _rev_out(_guard(get_service().save_snapshot, project_id, body["content"],
+                           body.get("revision_id")))
+
+
+@router.put("/projects/{project_id}/title-page")
+async def set_title_page(project_id: str, request: Request):
+    body = await _body(request)
+    fields = body.get("fields")
+    if not isinstance(fields, (dict, list)):
+        _bad("fields must be an object or a list of [key, value] pairs")
+    return _rev_out(_guard(get_service().set_title_page, project_id, fields, body.get("revision_id")))
+
+
+@router.post("/projects/{project_id}/replace")
+async def replace(project_id: str, request: Request):
+    body = await _body(request)
+    return _guard(get_service().find_replace, project_id, body.get("query", ""),
+                  body.get("replacement", ""), body.get("target", "all"), body.get("revision_id"))
+
+
+@router.put("/projects/{project_id}/rules")
+async def update_rules(project_id: str, request: Request):
+    """Body: any subset of dialogue_block_limit, page_limit, allowed_speakers,
+    protected, guidance, limits (null clears a limit)."""
+    body = await _body(request)
+    allowed = {"dialogue_block_limit", "page_limit", "allowed_speakers", "protected",
+               "guidance", "limits"}
+    changes = {k: v for k, v in body.items() if k in allowed}
+    if not changes:
+        _bad("no rule fields supplied")
+    rv = _guard(get_service().update_rules, project_id, **changes)
+    return {"id": rv.id, **rv.to_dict()}
 
 
 @router.post("/projects/{project_id}/restore")
 async def restore(project_id: str, request: Request):
-    body = await request.json()
-    rev = _guard(get_service().restore_snapshot, project_id, body["revision_id"])
-    return _dc(rev)
+    body = await _body(request)
+    if not body.get("revision_id"):
+        _bad("revision_id is required")
+    return _rev_out(_guard(get_service().restore_snapshot, project_id, body["revision_id"]))
 
 
 @router.post("/projects/{project_id}/undo")
 def undo(project_id: str):
-    return _dc(_guard(get_service().undo_latest, project_id))
+    return _rev_out(_guard(get_service().undo_latest, project_id))
+
+
+def _disposition(filename: str) -> str:
+    ascii_name = filename.encode("ascii", "replace").decode().replace('"', "'")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
 
 
 @router.get("/projects/{project_id}/pdf")
 def export_pdf(project_id: str, revision_id: Optional[str] = None):
-    exp = _guard(get_service().export_pdf, project_id, revision_id=revision_id)
-    data = Path(exp.artifact_path).read_bytes()
-    filename = Path(exp.artifact_path).name
-    return Response(content=data, media_type="application/pdf",
-                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+    svc = get_service()
+    exp = _guard(svc.export_pdf, project_id, revision_id=revision_id)
+    return Response(content=Path(exp.artifact_path).read_bytes(), media_type="application/pdf",
+                    headers={"Content-Disposition": _disposition(svc.pdf_filename(project_id))})
 
 
 @router.get("/projects/{project_id}/pdf/meta")
 def export_pdf_meta(project_id: str, revision_id: Optional[str] = None):
-    """Render the PDF and return its location as JSON (no binary body).
-
-    The Desktop pane uses this + the bridge's ``readFileDataUrl`` for embedded
-    viewing and an explicit download action (the ``api`` bridge is JSON-only).
-    """
-    exp = _guard(get_service().export_pdf, project_id, revision_id=revision_id)
+    """Render the PDF and return its location (the desktop reads the file via
+    the bridge's ``readFileDataUrl``; the ``api`` bridge is JSON-only)."""
+    svc = get_service()
+    exp = _guard(svc.export_pdf, project_id, revision_id=revision_id)
     path = Path(exp.artifact_path)
     return {"id": exp.id, "revision_id": exp.revision_id, "status": exp.status,
-            "path": exp.artifact_path, "filename": path.name,
+            "path": exp.artifact_path, "filename": svc.pdf_filename(project_id),
             "size_bytes": path.stat().st_size if path.exists() else None,
             "page_count": exp.page_count}
 
 
 @router.get("/projects/{project_id}/fountain")
 def export_fountain(project_id: str, revision_id: Optional[str] = None):
-    """Serialize a revision to Fountain text (JSON body with the ``fountain``
-    text + a suggested ``.fountain`` filename). The Desktop pane turns this
-    into a file download so the script can be opened in Fountain/Final Draft."""
     return _guard(get_service().export_fountain, project_id, revision_id)
+
+
+@router.get("/projects/{project_id}/fdx")
+def export_fdx(project_id: str, revision_id: Optional[str] = None):
+    return _guard(get_service().export_fdx, project_id, revision_id)

@@ -9,7 +9,6 @@ import _bootstrap as B
 from pathlib import Path
 
 from screenplay import importers
-from screenplay import rendering
 
 FIXTURES = Path(B.__file__).resolve().parent / "fixtures"
 SAMPLE_FDX = (FIXTURES / "sample.fdx").read_text(encoding="utf-8")
@@ -23,7 +22,7 @@ def test_detect_format_by_extension_and_sniff():
     # Content sniffing beats a missing/misleading extension.
     assert importers.detect_format("script.bin", b"%PDF-1.4\n") == "pdf"
     assert importers.detect_format("script.bin",
-                                   b"<?xml ...><finaldraft><scene>") == "fdx"
+                                   b"<?xml version=\"1.0\"?><FinalDraft><Content>") == "fdx"
     assert importers.detect_format("script.bin", b"INT. ROOM - NIGHT\n") == "fountain"
 
 
@@ -36,7 +35,7 @@ def test_to_fountain_passthrough():
 def test_fdx_to_fountain_structure():
     f = importers.fdx_to_fountain(SAMPLE_FDX)
     assert "Title: The Harbor Light" in f
-    assert "Credit: Written by Jane Doe" in f
+    assert "Credit: Written by" in f and "Author: Jane Doe" in f
     assert "INT. ROOM 1 - NIGHT" in f
     assert "EXT. ROOM 2 - DAY" in f
     # Character cue + parenthetical + dialogue land on their own lines.
